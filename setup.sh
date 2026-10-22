@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# SCRIPT SETUP CORE ENGINE: CASSANOVA TUNELLING V2
+# SCRIPT SETUP CORE ENGINE: CASSANOVA TUNELLING V2 (FULL PRODUCTION)
 # OS Support: Ubuntu 20.04/22.04/24.04 & Debian 10/11/12 (x86_64)
 # Repo: https://github.com/amiercassanova-21/sc-tunnel
 # ==============================================================================
@@ -33,7 +33,7 @@ else
     exit 1
 fi
 
-# Bersihkan Layar
+# Bersihkan Layar dan Buffer
 printf "\033[2J\033[H\033[3J"
 echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e "${BLUE}│${NC}    ${CYAN}MEMULAI INSTALASI CASSANOVA TUNNELING V2${NC}      ${BLUE}│${NC}"
@@ -50,18 +50,18 @@ if [[ -z "$USER_DOMAIN" ]]; then
     exit 1
 fi
 
-# Persiapan Folder dan Penyimpanan Domain
+# Persiapan Folder dan Database Awal
 mkdir -p /etc/xray /etc/ssh /var/log/xray
 echo "$USER_DOMAIN" > /etc/xray/domain.txt
 touch /etc/xray/vless.db /etc/xray/vmess.db /etc/xray/trojan.db /etc/ssh/.ssh.db
 
 # 3. Instalasi Paket Dependensi Sistem
-echo -e "${YELLOW}[1/7] Menginstal dependensi sistem dan alat pemantau...${NC}"
+echo -e "${YELLOW}[1/8] Menginstal dependensi sistem dan modul jaringan...${NC}"
 apt-get update -y
 apt-get install -y --no-install-recommends \
     curl wget socat jq tar unzip net-tools cron certbot nginx vnstat fail2ban iptables
 
-# Inisialisasi Database vnstat untuk Monitoring Bandwidth
+# Inisialisasi Database vnstat untuk Pemantau Bandwidth
 IFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n1)
 IFACE=${IFACE:-eth0}
 systemctl stop vnstat 2>/dev/null
@@ -70,17 +70,15 @@ systemctl restart vnstat
 systemctl enable vnstat
 
 # 4. Optimasi Kernel TCP BBR
-echo -e "${YELLOW}[2/7] Mengaktifkan akselerasi TCP BBR...${NC}"
-if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
-    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-fi
-if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf; then
-    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-fi
+echo -e "${YELLOW}[2/8] Mengaktifkan akselerasi TCP BBR...${NC}"
+sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
 sysctl -p /etc/sysctl.conf >/dev/null 2>&1
 
 # 5. Penerbitan Sertifikat SSL Let's Encrypt
-echo -e "${YELLOW}[3/7] Menerbitkan sertifikat SSL HTTPS...${NC}"
+echo -e "${YELLOW}[3/8] Menerbitkan sertifikat SSL HTTPS...${NC}"
 systemctl stop nginx 2>/dev/null || true
 certbot certonly --standalone --agree-tos --register-unsafely-without-email \
     -d "$USER_DOMAIN" --non-interactive
@@ -91,11 +89,11 @@ if [[ ! -f "/etc/letsencrypt/live/$USER_DOMAIN/fullchain.pem" ]]; then
 fi
 
 # 6. Pemasangan Resmi Xray-core
-echo -e "${YELLOW}[4/7] Menginstal Xray-core release resmi...${NC}"
+echo -e "${YELLOW}[4/8] Menginstal Xray-core release resmi...${NC}"
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
 
 # 7. Membangun Konfigurasi Multi-Inbound Xray
-echo -e "${YELLOW}[5/7] Mengonfigurasi engine Xray (VLESS, VMess, Trojan)...${NC}"
+echo -e "${YELLOW}[5/8] Mengonfigurasi engine Xray (VLESS, VMess, Trojan)...${NC}"
 cat <<EOF > /usr/local/etc/xray/config.json
 {
   "log": {
@@ -164,8 +162,8 @@ cat <<EOF > /usr/local/etc/xray/config.json
 }
 EOF
 
-# 8. Membangun Konfigurasi Nginx Reverse Proxy & Fallback
-echo -e "${YELLOW}[6/7] Menyiapkan reverse proxy Nginx di port 443...${NC}"
+# 8. Membangun Konfigurasi Nginx Reverse Proxy
+echo -e "${YELLOW}[6/8] Menyiapkan reverse proxy Nginx di port 443...${NC}"
 cat <<EOF > /etc/nginx/conf.d/tunnel.conf
 server {
     listen 80;
@@ -233,34 +231,55 @@ server {
 }
 EOF
 
-# 9. Mengunduh Seluruh Modul CLI & Eksekutor dari GitHub
-echo -e "${YELLOW}[7/7] Mengunduh modul antarmuka CASSANOVA V2...${NC}"
+# 9. Mengunduh Seluruh Modul CLI & Eksekutor dari GitHub (Bypass Cache CDN)
+echo -e "${YELLOW}[7/8] Mengunduh modul antarmuka CASSANOVA V2...${NC}"
 REPO="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main"
+CACHE_BUSTER="?v=$(date +%s)"
 
 # Download Menu Utama
-curl -sS -o /usr/bin/menu "${REPO}/menu.sh"
+curl -sS "${REPO}/menu.sh${CACHE_BUSTER}" -o /usr/bin/menu
 chmod +x /usr/bin/menu
 
 # Download Modul Navigasi (Folder modules/)
 MODULES=("m-ssh" "m-vmess" "m-vless" "m-trojan" "m-bot" "m-feature")
 for mod in "${MODULES[@]}"; do
-    curl -sS -o /usr/bin/${mod} "${REPO}/modules/${mod}.sh"
+    curl -sS "${REPO}/modules/${mod}.sh${CACHE_BUSTER}" -o /usr/bin/${mod}
     chmod +x /usr/bin/${mod}
 done
 
 # Download Eksekutor Core (Folder xrays/)
 XRAYS=("add-vless" "del-vless" "renew-vless" "cek-vless")
 for xry in "${XRAYS[@]}"; do
-    curl -sS -o /usr/bin/${xry} "${REPO}/xrays/${xry}.sh"
+    curl -sS "${REPO}/xrays/${xry}.sh${CACHE_BUSTER}" -o /usr/bin/${xry}
     chmod +x /usr/bin/${xry}
 done
+
+# 10. Membuat Alat Fast Updater di Sistem (/usr/bin/update-sc)
+cat << 'EOF' > /usr/bin/update-sc
+#!/bin/bash
+REPO="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main"
+CACHE="?v=$(date +%s)"
+echo -e "\033[1;33m[*] Mengambil update terbaru langsung dari GitHub...\033[0m"
+curl -sS "${REPO}/menu.sh${CACHE}" -o /usr/bin/menu && chmod +x /usr/bin/menu
+for mod in m-ssh m-vmess m-vless m-trojan m-bot m-feature; do
+    curl -sS "${REPO}/modules/${mod}.sh${CACHE}" -o /usr/bin/${mod} 2>/dev/null && chmod +x /usr/bin/${mod}
+done
+for xry in add-vless del-vless renew-vless cek-vless; do
+    curl -sS "${REPO}/xrays/${xry}.sh${CACHE}" -o /usr/bin/${xry} 2>/dev/null && chmod +x /usr/bin/${xry}
+done
+echo -e "\033[1;32m[OK] Semua berkas berhasil diperbarui!\033[0m"
+sleep 1
+menu
+EOF
+chmod +x /usr/bin/update-sc
 
 # Daftarkan Shortcut agar Menu Langsung Tampil Saat Login SSH
 if ! grep -q "menu" /root/.bashrc; then
     echo "menu" >> /root/.bashrc
 fi
 
-# 10. Restart & Enable Seluruh Service
+# 11. Restart & Enable Seluruh Service
+echo -e "${YELLOW}[8/8] Memulai ulang seluruh layanan service...${NC}"
 systemctl daemon-reload
 systemctl restart xray nginx fail2ban
 systemctl enable xray nginx fail2ban
@@ -278,8 +297,8 @@ echo -e "VMess Path      : /vmess"
 echo -e "Trojan Path     : /trojan"
 echo -e "----------------------------------------------------"
 echo -e "Ketik '${CYAN}menu${NC}' untuk membuka dashboard sistem kapan saja."
+echo -e "Ketik '${CYAN}update-sc${NC}' jika selesai melakukan commit di GitHub."
 echo -e "${GREEN}====================================================${NC}\n"
 
-# Langsung jalankan menu utama
 sleep 2
 menu
