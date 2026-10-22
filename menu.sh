@@ -125,14 +125,14 @@ echo ""
 read -rp "Select From Options [1-9 or x] : " OPTION
 
 case $OPTION in
-    1) echo "Membuka Menu SSH..."; sleep 1; menu ;;
-    2) echo "Membuka Menu VMess..."; sleep 1; menu ;;
-    3) echo "Membuka Menu VLESS..."; sleep 1; menu ;;
-    4) echo "Membuka Menu Trojan..."; sleep 1; menu ;;
-    5) echo "Membuka Menu Setup Bot..."; sleep 1; menu ;;
-    6) echo "Membuka Menu Features..."; sleep 1; menu ;;
-    7) echo "Membuka Menu Set Time..."; sleep 1; menu ;;
-    8) echo "Membuka Menu Brand..."; sleep 1; menu ;;
+    1) m-ssh ;;
+    2) m-vmess ;;
+    3) m-vless ;;
+    4) m-trojan ;;
+    5) m-bot ;;
+    6) m-feature ;;
+    7) echo "Fitur Reduce/Time..."; sleep 1; menu ;;
+    8) echo "Fitur Ubah Brand..."; sleep 1; menu ;;
     9) systemctl status xray nginx ;;
     x|X) exit 0 ;;
     *) echo -e "${RED}Pilihan tidak valid!${NC}"; sleep 1; menu ;;
