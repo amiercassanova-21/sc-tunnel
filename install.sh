@@ -13,7 +13,7 @@ fi
 apt update -y && apt install -y curl wget
 
 # Ganti 'USERNAME_GITHUB' dengan username GitHub Anda
-REPO_URL="https://raw.githubusercontent.com/USERNAME_GITHUB/sc-tunnel/main"
+REPO_URL="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main"
 
 # Download dan jalankan setup.sh (mesin inti)
 curl -sS "${REPO_URL}/setup.sh" | bash
