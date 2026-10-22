@@ -85,7 +85,7 @@ systemctl enable xray nginx
 
 # 8. Daftarkan Perintah 'menu' ke Sistem
 # Ganti USERNAME_GITHUB dengan username GitHub Anda
-REPO_URL="https://raw.githubusercontent.com/USERNAME_GITHUB/sc-tunnel/main"
+REPO_URL="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main"
 curl -sS -o /usr/bin/menu "${REPO_URL}/menu.sh"
 chmod +x /usr/bin/menu
 
