@@ -1,9 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# PANEL DASHBOARD: CASSANOVA TUNELLING V2 (FULL UPGRADE)
+# PANEL DASHBOARD: CASSANOVA TUNELLING V2 (SOLID BLOCK EDITION)
 # ==============================================================================
 
-# Bersihkan layar dan buffer scrollback total (bebas glitch di Termius HP)
+# Bersihkan layar dan buffer scrollback total (bebas glitch Termius)
 printf "\033[2J\033[H\033[3J"
 
 # Definisi Warna Escape ANSI
@@ -47,8 +47,6 @@ DOMAIN=$(cat /etc/xray/domain.txt 2>/dev/null || echo "sgdo5.cassanova.xyz")
 # Status Layanan Utama
 STATUS_XRAY=$(systemctl is-active --quiet xray && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
 STATUS_SSH=$(systemctl is-active --quiet nginx && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
-
-# Status Proteksi Server
 STATUS_BBR=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" && echo -e "${GREEN}ON${NC}" || echo -e "${GREEN}ON${NC}")
 STATUS_F2B=$(systemctl is-active --quiet fail2ban 2>/dev/null && echo -e "${GREEN}ON${NC}" || echo -e "${GREEN}ON${NC}")
 
@@ -64,15 +62,14 @@ CURR_DAY=$(date +%A)
 
 # --- TAMPILAN DASHBOARD ---
 
-# ASCII ART SIGNATURE BANNER
-echo -e "${RED}  ___   _   ___ ___   _   _  _ _____   __ _   ${NC}"
-echo -e "${RED} / __| /_\ / __/ __| /_\ | \| | _ \ \ / //_\  ${NC}"
-echo -e "${WHITE}| (__ / _ \\\__ \\\__ \/ _ \| .\` | // \ V // _ \ ${NC}"
-echo -e "${WHITE} \___/_/ \_\___/___/_/ \_\_|\_|_|_\ \_/ /_/ \_\${NC}"
-echo -e "      ${CYAN}• CASSANOVA TUNNELING ENGINE V2 •${NC}"
-echo ""
+# 1. HEADER LOGO SOLID BLOCK (TEGAS & BEBAS ANOMALI ESCAPE)
+echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
+echo -e " ${BLUE}│${NC}       ${RED}█▀▀ █▀█ █▀▀ █▀▀ █▀█ █▄ █ █▀█ █ █ █▀█${NC}       ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC}       ${WHITE}█▄▄ █▀█ ▄██ ▄██ █▀█ █ ▀█ █▄█ ▀▄▀ █▀█${NC}       ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC}            ${CYAN}• CASSANOVA TUNNELING V2 •${NC}            ${BLUE}│${NC}"
+echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
-# PANEL INFO SISTEM & RESOURCE BAR
+# 2. PANEL INFO SISTEM & RESOURCE BAR
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}OS${NC}       : ${OS_NAME}"
 echo -e " ${BLUE}│${NC} ${GREEN}RAM${NC}      : [${CYAN}${RAM_BAR}${NC}] ${RAM_PERCENT}% (${RAM_USED}M/${RAM_TOTAL}M)"
@@ -92,12 +89,12 @@ echo -e " ${BLUE}│${NC} ${GREEN}TX${NC}       : 312.56 GiB"
 echo -e " ${BLUE}│${NC} ${GREEN}TRAFFIC${NC}  : 65.06 Mbit/s"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
-# SERVICE & SECURITY STATUS BAR
+# 3. SERVICE & SECURITY STATUS BAR
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}XRAY${NC}:${STATUS_XRAY} │ ${GREEN}SSH-WS${NC}:${STATUS_SSH} │ ${GREEN}BBR${NC}:${STATUS_BBR} │ ${GREEN}F2B${NC}:${STATUS_F2B} │  ${GREEN}GOOD${NC}  ${BLUE}│${NC}"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
-# LIST ACCOUNTS PANEL
+# 4. LIST ACCOUNTS PANEL
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}                  ${GREEN}LIST ACCOUNTS${NC}                   ${BLUE}│${NC}"
 echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC}"
@@ -107,7 +104,7 @@ echo -e " ${BLUE}│${NC}  ${GREEN}VLESS${NC}         : ${YELLOW}${TOTAL_VLESS}$
 echo -e " ${BLUE}│${NC}  ${GREEN}TROJAN${NC}        : ${YELLOW}${TOTAL_TROJAN}${NC}  ACCOUNT"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
-# INFO LISENSI
+# 5. INFO LISENSI
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}  ${GREEN}Version${NC}     : ${VERSION}"
 echo -e " ${BLUE}│${NC}  ${GREEN}Order By${NC}    : ${RED}${ORDER_BY}${NC}"
@@ -115,7 +112,7 @@ echo -e " ${BLUE}│${NC}  ${GREEN}Client Name${NC} : ${RED}${CLIENT_NAME}${NC}"
 echo -e " ${BLUE}│${NC}  ${GREEN}Expiry In${NC}   : ${RED}${EXP_DAYS}${NC}"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
-# MENU NAVIGASI DUA KOLOM
+# 6. MENU NAVIGASI DUA KOLOM
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}  ${GREEN}1.)${NC} ⌨ SSH                 ${GREEN}6.)${NC} ⌨ FEATURES"
 echo -e " ${BLUE}│${NC}  ${GREEN}2.)${NC} ⌨ VMESS               ${GREEN}7.)${NC} ⌨ SET REDUCE/TIME"
