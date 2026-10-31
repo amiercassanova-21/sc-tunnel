@@ -23,7 +23,7 @@ DOMAIN=$(cat /etc/xray/domain.txt 2>/dev/null | tr -d '[:space:]')
 
 STATUS_XRAY=$(systemctl is-active --quiet xray && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
 STATUS_SSH=$(systemctl is-active --quiet ws-ssh && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
-STATUS_BBR=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" && echo -e "${GREEN}ON${NC}" || echo -e "${GREEN}ON${NC}")
+STATUS_BBR=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
 STATUS_F2B=$(systemctl is-active --quiet fail2ban 2>/dev/null && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
 
 TOTAL_SSH=$(grep -E "^### " /etc/ssh/.ssh.db 2>/dev/null | wc -l)
