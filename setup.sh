@@ -439,3 +439,9 @@ systemctl restart xray nginx ws-ssh dropbear fail2ban vnstat
 echo -e "${GREEN}====================================================${NC}"
 echo -e "${GREEN}[OK] Instalasi Cassanova Tunneling Selesai!${NC}"
 echo -e "${GREEN}====================================================${NC}"
+
+echo -e "${YELLOW}Menginstal modul menu...${NC}"
+cp -r sc-tunnel-main/modules/* /usr/bin/
+cp sc-tunnel-main/menu.sh /usr/bin/menu
+chmod +x /usr/bin/m-*
+chmod +x /usr/bin/menu
