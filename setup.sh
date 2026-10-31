@@ -1,25 +1,26 @@
 #!/bin/bash
 # ==============================================================================
-# CASSANOVA TUNNELING V2 - PRODUCTION AUTO-INSTALLER
+# CASSANOVA TUNNELING V2 - ULTIMATE AUTO-INSTALLER (FULL CODE)
 # OS Support: Ubuntu 20.04/22.04/24.04 & Debian 11/12
 # ==============================================================================
 
+# Memastikan dijalankan sebagai root
 if [[ $EUID -ne 0 ]]; then
-   echo -e "\e[1;31m[RALAT] Skrip wajib dijalankan sebagai root!\e[0m"
+   echo -e "\e[1;31m[ERROR] Script wajib dijalankan sebagai root!\e[0m"
    exit 1
 fi
 
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'
+NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'; MAGENTA='\e[1;35m'
 clear
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo -e "        ${GREEN}PEMASANGAN CASSANOVA TUNNELING V2 (MULTI-PORT)${NC}"
+echo -e "        ${GREEN}INSTALASI CASSANOVA TUNNELING V2 (MULTI-PORT)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-read -rp " Masukkan Domain VPS Anda (Kosongkan untuk guna IP): " INPUT_DOM
+read -rp " Masukkan Domain VPS Anda (Kosongkan = Pakai IP): " INPUT_DOM
 
 export DEBIAN_FRONTEND=noninteractive
 echo -e "${YELLOW}[1/8] Memperbarui sistem & memasang dependensi...${NC}"
 apt-get update -y >/dev/null 2>&1
-apt-get install -y jq curl wget openssl net-tools uuid-runtime vnstat dropbear nginx certbot fail2ban python3 cron >/dev/null 2>&1
+apt-get install -y jq curl wget openssl net-tools uuid-runtime vnstat dropbear nginx certbot fail2ban python3 tar gzip cron bc >/dev/null 2>&1
 
 mkdir -p /etc/xray/limit/ip /etc/xray/limit/bw /etc/xray/usage /var/log/xray /usr/local/etc/xray /etc/ssh /etc/bot /etc/dropbear /usr/bin
 touch /etc/xray/vless.db /etc/xray/vmess.db /etc/xray/trojan.db /etc/ssh/.ssh.db
@@ -30,9 +31,9 @@ MY_IP=$(curl -sS --max-time 5 https://ipv4.icanhazip.com || echo "127.0.0.1")
 DOMAIN="${INPUT_DOM:-$MY_IP}"
 echo "$DOMAIN" > /etc/xray/domain.txt
 echo "$DOMAIN" > /etc/xray/sni.txt
-echo "CASSANOVA TUNNELING V2" > /etc/xray/brand.txt
+echo "POTATO TUNNELING" > /etc/xray/brand.txt
 
-echo -e "${YELLOW}[2/8] Menyiapkan Sijil SSL & Xray-Core...${NC}"
+echo -e "${YELLOW}[2/8] Menyiapkan SSL & Instalasi Xray-Core...${NC}"
 systemctl stop nginx 2>/dev/null || true
 if [[ "$DOMAIN" != "$MY_IP" ]]; then
     certbot certonly --standalone --agree-tos --register-unsafely-without-email -d "$DOMAIN" --non-interactive 2>/dev/null || true
@@ -41,7 +42,7 @@ if [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
     cp "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" /etc/xray/xray.crt
     cp "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" /etc/xray/xray.key
 else
-    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -subj "/C=ID/ST=Kuala_Lumpur/L=Kuala_Lumpur/O=Cassanova/CN=${DOMAIN}" >/dev/null 2>&1
+    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -subj "/C=ID/ST=Jakarta/L=Jakarta/O=Cassanova/CN=${DOMAIN}" >/dev/null 2>&1
 fi
 chmod 644 /etc/xray/xray.crt /etc/xray/xray.key
 
@@ -69,6 +70,7 @@ cat << 'XCFG' > /usr/local/etc/xray/config.json
   "outbounds": [ { "protocol": "freedom", "tag": "direct" }, { "protocol": "blackhole", "tag": "blocked" } ]
 }
 XCFG
+
 XRAY_BIN=$(command -v xray || echo "/usr/local/bin/xray")
 cat << SVC > /etc/systemd/system/xray.service
 [Unit]
@@ -83,14 +85,17 @@ LimitNOFILE=1000000
 WantedBy=multi-user.target
 SVC
 
-echo -e "${YELLOW}[3/8] Menetapkan Nginx (Proksi Terbalik Multi-Port)...${NC}"
+echo -e "${YELLOW}[3/8] Mengonfigurasi Nginx Reverse Proxy (Multi-Port 80, 443, 2096)...${NC}"
 cat << 'NGNX' > /etc/nginx/nginx.conf
-user www-data; worker_processes auto; pid /run/nginx.pid; include /etc/nginx/modules-enabled/*.conf;
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
 events { worker_connections 4096; multi_accept on; }
 http {
     sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65; types_hash_max_size 2048; client_max_body_size 0;
     include /etc/nginx/mime.types; default_type application/octet-stream;
-    map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+    map $http_upgrade$connection_upgrade { default upgrade; '' close; }
     include /etc/nginx/conf.d/*.conf;
 }
 NGNX
@@ -124,7 +129,7 @@ server {
 NCFG
 if ! nginx -t >/dev/null 2>&1; then sed -i 's/http2 //g' /etc/nginx/conf.d/xray.conf; fi
 
-echo -e "${YELLOW}[4/8] Membina Enjin Pusat Xray & Sub-Menu Protocol...${NC}"
+echo -e "${YELLOW}[4/8] Membangun Engine Sentral Xray-Manager...${NC}"
 cat << 'XMGR_EOF' > /usr/bin/xray-manager
 #!/bin/bash
 PROTO="$1"; ACTION="$2"; UPPER_PROTO=$(echo "$PROTO" | tr 'a-z' 'A-Z')
@@ -200,7 +205,7 @@ case "$ACTION" in
     delete|renew|modify|check-config)
         grep -E "^### " "$DB_FILE" | awk '{print $2, $3, $5}' | nl -s ') '
         read -rp " Input Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### " "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
+        [[ "$IN_U" =~ ^[0-9]+$]] && U=$(grep -E "^### " "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
         DATA=$(grep -E "^### ${U} " "$DB_FILE"); [[ -z "$DATA" ]] && exit 1
         E=$(echo "$DATA" | awk '{print $3}'); C=$(echo "$DATA" | awk '{print $4}'); ST=$(echo "$DATA" | awk '{print $5}')
         if [[ "$ACTION" == "delete" ]]; then
@@ -209,10 +214,10 @@ case "$ACTION" in
             read -rp " Tambah Hari: " D; [[ ! "$D" =~ ^[0-9]+$ ]] && D=30
             NOW=$(date +%s); EXP=$(date -d "$E" +%s 2>/dev/null || echo "$NOW"); [[ "$NOW" -gt "$EXP" ]] && BASE=$NOW || BASE=$EXP
             NEW_E=$(date -d "@$((BASE + D * 86400))" +"%Y-%m-%d")
-            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $NEW_E $C ${ST:-unlocked}" >> "$DB_FILE"; echo -e "${GREEN}Renewed!${NC}"; sleep 1
+            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $NEW_E$C ${ST:-unlocked}" >> "$DB_FILE"; echo -e "${GREEN}Renewed!${NC}"; sleep 1
         elif [[ "$ACTION" == "modify" ]]; then
             read -rp " New UUID/Pass: " C
-            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $E $C ${ST:-unlocked}" >> "$DB_FILE"; inject_user "$U" "$C"; systemctl restart xray; echo -e "${GREEN}Modified!${NC}"; sleep 1
+            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $E$C ${ST:-unlocked}" >> "$DB_FILE"; inject_user "$U" "$C"; systemctl restart xray; echo -e "${GREEN}Modified!${NC}"; sleep 1
         else
             print_6_links "$U" "$C" "$E" "${ST:-Active}"; read -n1 -srp "Enter..."
         fi
@@ -237,14 +242,14 @@ case "$ACTION" in
         [[ "$ACTION" == "lock" ]] && TARGET="unlocked" || TARGET="locked"
         grep -E "^### .* $TARGET$" "$DB_FILE" | awk '{print $2}' | nl -s ') '
         read -rp " Input Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### .* $TARGET$" "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
+        [[ "$IN_U" =~ ^[0-9]+$]] && U=$(grep -E "^### .* $TARGET$" "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
         DATA=$(grep -E "^### ${U} " "$DB_FILE"); [[ -z "$DATA" ]] && exit 1
         E=$(echo "$DATA" | awk '{print $3}'); C=$(echo "$DATA" | awk '{print $4}')
         sed -i "/^### ${U} /d" "$DB_FILE"
         if [[ "$ACTION" == "lock" ]]; then
-            echo "### $U $E $C locked" >> "$DB_FILE"; remove_user "$U"; echo -e "${RED}Locked!${NC}"
+            echo "### $U $E$C locked" >> "$DB_FILE"; remove_user "$U"; echo -e "${RED}Locked!${NC}"
         else
-            echo "### $U $E $C unlocked" >> "$DB_FILE"; inject_user "$U" "$C"; echo -e "${GREEN}Unlocked!${NC}"
+            echo "### $U $E$C unlocked" >> "$DB_FILE"; inject_user "$U" "$C"; echo -e "${GREEN}Unlocked!${NC}"
         fi
         systemctl restart xray; sleep 1
         ;;
@@ -369,68 +374,30 @@ AEXP
 chmod +x /usr/bin/autokill-xray /usr/bin/auto-exp
 (crontab -l 2>/dev/null | grep -v "autokill" | grep -v "auto-exp"; echo "0 0 * * * /usr/bin/auto-exp"; echo "*/2 * * * * /usr/bin/autokill-xray") | crontab -
 
-echo -e "${YELLOW}[7/8] Menyiapkan Menu Utama...${NC}"
+echo -e "${YELLOW}[7/8] Menyiapkan Menu Utama & Bashrc Login (Tampilan Potato Tunneling)...${NC}"
 cat << 'MENU_EOF' > /usr/bin/menu
 #!/bin/bash
 trap 'echo -e "\n\e[1;33mKembali ke Terminal...\e[0m"; exit 0' SIGINT
 NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'
-B=$(cat /etc/xray/brand.txt 2>/dev/null); [[ -z "$B" ]] && B="CASSANOVA TUNNELING"
-O=$(grep -w PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"'); R=$(free -m | awk 'NR==2{print $3"M/"$2"M"}')
+B=$(cat /etc/xray/brand.txt 2>/dev/null); [[ -z "$B" ]] && B="POTATO TUNNELING"
+O=$(grep -w PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"'); R=$(free -m | awk 'NR==2{print $3"M"}'); SWP=$(free -m | awk 'NR==3{print $2"M"}')
 I=$(curl -sS --max-time 2 https://ipv4.icanhazip.com || echo "127.0.0.1")
 D=$(cat /etc/xray/domain.txt 2>/dev/null || echo "$I")
+CTY=$(curl -sS --max-time 2 "http://ip-api.com/json/${I}" | jq -r '.city // "Singapore"' 2>/dev/null || echo "Singapore")
+ISP=$(curl -sS --max-time 2 "http://ip-api.com/json/${I}" | jq -r '.isp // "DigitalOcean"' 2>/dev/null || echo "DigitalOcean")
+UPT=$(uptime -p | sed 's/up //')
 TS=$(awk '/^### /{c++} END{print c+0}' /etc/ssh/.ssh.db 2>/dev/null || echo "0")
 TV=$(awk '/^### /{c++} END{print c+0}' /etc/xray/vmess.db 2>/dev/null || echo "0")
 TL=$(awk '/^### /{c++} END{print c+0}' /etc/xray/vless.db 2>/dev/null || echo "0")
 TT=$(awk '/^### /{c++} END{print c+0}' /etc/xray/trojan.db 2>/dev/null || echo "0")
 
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}             \e[41;97m ${B} \e[0m              ${BLUE}│${NC}"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}  OS     : ${GREEN}${O}${NC}"
-echo -e "${BLUE}│${NC}  RAM    : ${GREEN}${R}${NC}"
-echo -e "${BLUE}│${NC}  IP     : ${GREEN}${I}${NC}"
-echo -e "${BLUE}│${NC}  DOMAIN : ${GREEN}${D}${NC}"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}                  \e[32mLIST ACCOUNTS\e[0m                   ${BLUE}│${NC}"
-echo -e "${BLUE}│${NC} ──────────────────────────────────────────────── ${BLUE}│${NC}"
-printf "${BLUE}│${NC}  SSH/OPENVPN   : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TS"
-printf "${BLUE}│${NC}  VMESS         : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TV"
-printf "${BLUE}│${NC}  VLESS         : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TL"
-printf "${BLUE}│${NC}  TROJAN        : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TT"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-[[ "$1" == "--banner-only" ]] && { echo -e " \e[31mto access use \e[32mmenu\e[31m command\e[0m\n"; exit 0; }
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}  ${GREEN}1.)${NC} ⌨ VLESS               ${GREEN}4.)${NC} ⌨ SSH"
-echo -e "${BLUE}│${NC}  ${GREEN}2.)${NC} ⌨ VMESS               ${GREEN}5.)${NC} ⌨ FEATURES"
-echo -e "${BLUE}│${NC}  ${GREEN}3.)${NC} ⌨ TROJAN              ${RED}x.)${NC} ⌨ EXIT"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-read -rp " Select: " OPT
-trap 'echo ""; /usr/bin/menu; exit 0' SIGINT
-case $OPT in
-    1) m-vless ;; 2) m-vmess ;; 3) m-trojan ;; 4) m-ssh ;; 5) m-feature ;; x|X) exit 0 ;; *) menu ;;
-esac
-MENU_EOF
-chmod +x /usr/bin/menu
+IFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n1); IFACE=${IFACE:-eth0}
+if command -v vnstat >/dev/null 2>&1; then
+    M_DATA=$(vnstat -i "$IFACE" -m --oneline 2>/dev/null); D_DATA=$(vnstat -i "$IFACE" -d --oneline 2>/dev/null)
+    MT=$(echo "$M_DATA" | cut -d';' -f11); MRX=$(echo "$M_DATA" | cut -d';' -f9); MTX=$(echo "$M_DATA" | cut -d';' -f10)
+    DT=$(echo "$D_DATA" | cut -d';' -f6); DRX=$(echo "$D_DATA" | cut -d';' -f4); DTX=$(echo "$D_DATA" | cut -d';' -f5)
+fi
+CUR_M=$(date +%B); CUR_D=$(date +%A)
 
-cat << 'BRC_EOF' > /root/.bashrc
-case $- in *i*) ;; *) return;; esac
-HISTCONTROL=ignoredups:ignorespace; shopt -s histappend; HISTSIZE=1000; HISTFILESIZE=2000; shopt -s checkwinsize
-if [ -f ~/.bash_aliases ]; then . ~/.bash_aliases; fi
-PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-if [[ -f /usr/bin/menu ]]; then /usr/bin/menu --banner-only 2>/dev/null; fi
-BRC_EOF
-
-# Sediakan shell kosong m-ssh dan m-feature (bisa disalin dari implementasi sebelumnya jika diperlukan)
-echo 'echo "SSH Menu (TBA)"' > /usr/bin/m-ssh; chmod +x /usr/bin/m-ssh
-echo 'echo "Features Menu (TBA)"' > /usr/bin/m-feature; chmod +x /usr/bin/m-feature
-
-echo -e "${YELLOW}[8/8] Mengemaskini sistem dan memulakan perkhidmatan...${NC}"
-systemctl daemon-reload
-systemctl enable xray nginx ws-ssh dropbear fail2ban vnstat >/dev/null 2>&1
-systemctl restart xray nginx ws-ssh dropbear fail2ban vnstat
-
-echo -e "${GREEN}====================================================${NC}"
-echo -e "${GREEN}[OK] Pemasangan Cassanova Tunneling Selesai! Taipkan 'menu' untuk mula.${NC}"
-echo -e "${GREEN}====================================================${NC}"
+echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
+echo -e "${BLUE}│${
