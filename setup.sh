@@ -4,7 +4,6 @@
 # OS Support: Ubuntu 20.04/22.04/24.04 & Debian 11/12
 # ==============================================================================
 
-# Memastikan dijalankan sebagai root
 if [[ $EUID -ne 0 ]]; then
    echo -e "\e[1;31m[ERROR] Script wajib dijalankan sebagai root!\e[0m"
    exit 1
@@ -95,7 +94,7 @@ events { worker_connections 4096; multi_accept on; }
 http {
     sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65; types_hash_max_size 2048; client_max_body_size 0;
     include /etc/nginx/mime.types; default_type application/octet-stream;
-    map $http_upgrade$connection_upgrade { default upgrade; '' close; }
+    map $http_upgrade $connection_upgrade { default upgrade; '' close; }
     include /etc/nginx/conf.d/*.conf;
 }
 NGNX
@@ -205,7 +204,7 @@ case "$ACTION" in
     delete|renew|modify|check-config)
         grep -E "^### " "$DB_FILE" | awk '{print $2, $3, $5}' | nl -s ') '
         read -rp " Input Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$]] && U=$(grep -E "^### " "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
+        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### " "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
         DATA=$(grep -E "^### ${U} " "$DB_FILE"); [[ -z "$DATA" ]] && exit 1
         E=$(echo "$DATA" | awk '{print $3}'); C=$(echo "$DATA" | awk '{print $4}'); ST=$(echo "$DATA" | awk '{print $5}')
         if [[ "$ACTION" == "delete" ]]; then
@@ -214,10 +213,10 @@ case "$ACTION" in
             read -rp " Tambah Hari: " D; [[ ! "$D" =~ ^[0-9]+$ ]] && D=30
             NOW=$(date +%s); EXP=$(date -d "$E" +%s 2>/dev/null || echo "$NOW"); [[ "$NOW" -gt "$EXP" ]] && BASE=$NOW || BASE=$EXP
             NEW_E=$(date -d "@$((BASE + D * 86400))" +"%Y-%m-%d")
-            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $NEW_E$C ${ST:-unlocked}" >> "$DB_FILE"; echo -e "${GREEN}Renewed!${NC}"; sleep 1
+            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $NEW_E $C ${ST:-unlocked}" >> "$DB_FILE"; echo -e "${GREEN}Renewed!${NC}"; sleep 1
         elif [[ "$ACTION" == "modify" ]]; then
             read -rp " New UUID/Pass: " C
-            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $E$C ${ST:-unlocked}" >> "$DB_FILE"; inject_user "$U" "$C"; systemctl restart xray; echo -e "${GREEN}Modified!${NC}"; sleep 1
+            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $E $C ${ST:-unlocked}" >> "$DB_FILE"; inject_user "$U" "$C"; systemctl restart xray; echo -e "${GREEN}Modified!${NC}"; sleep 1
         else
             print_6_links "$U" "$C" "$E" "${ST:-Active}"; read -n1 -srp "Enter..."
         fi
@@ -242,14 +241,14 @@ case "$ACTION" in
         [[ "$ACTION" == "lock" ]] && TARGET="unlocked" || TARGET="locked"
         grep -E "^### .* $TARGET$" "$DB_FILE" | awk '{print $2}' | nl -s ') '
         read -rp " Input Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$]] && U=$(grep -E "^### .* $TARGET$" "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
+        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### .* $TARGET$" "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
         DATA=$(grep -E "^### ${U} " "$DB_FILE"); [[ -z "$DATA" ]] && exit 1
         E=$(echo "$DATA" | awk '{print $3}'); C=$(echo "$DATA" | awk '{print $4}')
         sed -i "/^### ${U} /d" "$DB_FILE"
         if [[ "$ACTION" == "lock" ]]; then
-            echo "### $U $E$C locked" >> "$DB_FILE"; remove_user "$U"; echo -e "${RED}Locked!${NC}"
+            echo "### $U $E $C locked" >> "$DB_FILE"; remove_user "$U"; echo -e "${RED}Locked!${NC}"
         else
-            echo "### $U $E$C unlocked" >> "$DB_FILE"; inject_user "$U" "$C"; echo -e "${GREEN}Unlocked!${NC}"
+            echo "### $U $E $C unlocked" >> "$DB_FILE"; inject_user "$U" "$C"; echo -e "${GREEN}Unlocked!${NC}"
         fi
         systemctl restart xray; sleep 1
         ;;
@@ -281,7 +280,6 @@ echo -e "  \${GREEN}1.)\${NC} Create             \${GREEN}6.)\${NC} Modify UUID\
 echo -e " \${BLUE}──────────────────────────────────────────────────\${NC}"
 echo -e "  \${GREEN}11.)\${NC} Edit Limit IP     \${GREEN}12.)\${NC} Edit Limit BW\n  \${RED}x.)\${NC}  Back"
 read -rp " Pilih: " OPT
-trap 'echo ""; /usr/bin/m-${P}; exit 0' SIGINT
 case \$OPT in
     1) xray-manager ${P} create ;; 2) xray-manager ${P} custom ;; 3) xray-manager ${P} delete ;;
     4) xray-manager ${P} renew ;; 5) xray-manager ${P} check-config ;; 6) xray-manager ${P} modify ;;
@@ -374,7 +372,7 @@ AEXP
 chmod +x /usr/bin/autokill-xray /usr/bin/auto-exp
 (crontab -l 2>/dev/null | grep -v "autokill" | grep -v "auto-exp"; echo "0 0 * * * /usr/bin/auto-exp"; echo "*/2 * * * * /usr/bin/autokill-xray") | crontab -
 
-echo -e "${YELLOW}[7/8] Menyiapkan Menu Utama & Bashrc Login (Tampilan Potato Tunneling)...${NC}"
+echo -e "${YELLOW}[7/8] Menyiapkan Menu Utama & Bashrc Login...${NC}"
 cat << 'MENU_EOF' > /usr/bin/menu
 #!/bin/bash
 trap 'echo -e "\n\e[1;33mKembali ke Terminal...\e[0m"; exit 0' SIGINT
@@ -400,4 +398,69 @@ fi
 CUR_M=$(date +%B); CUR_D=$(date +%A)
 
 echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${
+echo -e "${BLUE}│${NC}   \e[41;97m               ${B}               \e[0m   ${BLUE}│${NC}"
+echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
+echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
+echo -e "${BLUE}│${NC}  OS     : ${GREEN}${O}${NC}"
+echo -e "${BLUE}│${NC}  RAM    : ${GREEN}${R}${NC}"
+echo -e "${BLUE}│${NC}  SWAP   : ${GREEN}${SWP}${NC}"
+echo -e "${BLUE}│${NC}  CITY   : ${GREEN}${CTY}${NC}"
+echo -e "${BLUE}│${NC}  ISP    : ${GREEN}${ISP}${NC}"
+echo -e "${BLUE}│${NC}  IP     : ${GREEN}${I}${NC}"
+echo -e "${BLUE}│${NC}  DOMAIN : ${GREEN}${D}${NC}"
+echo -e "${BLUE}│${NC}  UPTIME : ${GREEN}${UPT}${NC}"
+echo -e "${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC}"
+echo -e "${BLUE}│${NC}  MONTH  : ${GREEN}${MT:-0.00 GiB}${NC}          ${YELLOW}[${CUR_M}]${NC}"
+echo -e "${BLUE}│${NC}  RX     : ${GREEN}${MRX:-0.00 GiB}${NC}"
+echo -e "${BLUE}│${NC}  TX     : ${GREEN}${MTX:-0.00 GiB}${NC}"
+echo -e "${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC}"
+echo -e "${BLUE}│${NC}  DAY    : ${GREEN}${DT:-0.00 GiB}${NC}          ${YELLOW}[${CUR_D}]${NC}"
+echo -e "${BLUE}│${NC}  RX     : ${GREEN}${DRX:-0.00 GiB}${NC}"
+echo -e "${BLUE}│${NC}  TX     : ${GREEN}${DTX:-0.00 GiB}${NC}"
+echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
+echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
+echo -e "${BLUE}│${NC} ${GREEN}XRAY:ON${NC} │ ${GREEN}SSH-WS:ON${NC} │ ${GREEN}LOADBLC:ON${NC} │     ${GREEN}GOOD${NC}     ${BLUE}│${NC}"
+echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
+echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
+echo -e "${BLUE}│${NC}                  \e[32mLIST ACCOUNTS\e[0m                   ${BLUE}│${NC}"
+echo -e "${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC} ${BLUE}│${NC}"
+printf "${BLUE}│${NC}  SSH/OPENVPN   : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TS"
+printf "${BLUE}│${NC}  VMESS         : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TV"
+printf "${BLUE}│${NC}  VLESS         : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TL"
+printf "${BLUE}│${NC}  TROJAN        : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TT"
+echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
+[[ "$1" == "--banner-only" ]] && { echo -e "\n \e[31mto access use \e[32mmenu\e[31m command\e[0m\n\n \e[32mUp to date\e[0m\n"; exit 0; }
+echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
+echo -e "${BLUE}│${NC}  ${GREEN}1.)${NC} ⌨ SSH                 ${GREEN}6.)${NC} ⌨ FEATURES"
+echo -e "${BLUE}│${NC}  ${GREEN}2.)${NC} ⌨ VMESS               ${GREEN}7.)${NC} ⌨ SET REDUCE/TIME"
+echo -e "${BLUE}│${NC}  ${GREEN}3.)${NC} ⌨ VLESS               ${GREEN}8.)${NC} ⌨ SET BRAND NAME"
+echo -e "${BLUE}│${NC}  ${GREEN}4.)${NC} ⌨ TROJAN              ${GREEN}9.)${NC} ⌨ CHECK SERVICES"
+echo -e "${BLUE}│${NC}  ${GREEN}5.)${NC} ⌨ SETUP BOT           ${RED}x.)${NC} ⌨ EXIT"
+echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
+read -rp " Select: " OPT
+case $OPT in
+    1) m-ssh ;; 2) m-vmess ;; 3) m-vless ;; 4) m-trojan ;; 5) m-bot ;; 6) m-feature ;; x|X) exit 0 ;; *) menu ;;
+esac
+MENU_EOF
+chmod +x /usr/bin/menu
+
+cat << 'BRC_EOF' > /root/.bashrc
+case $- in *i*) ;; *) return;; esac
+HISTCONTROL=ignoredups:ignorespace; shopt -s histappend; HISTSIZE=1000; HISTFILESIZE=2000; shopt -s checkwinsize
+if [ -f ~/.bash_aliases ]; then . ~/.bash_aliases; fi
+PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+if [[ -f /usr/bin/menu ]]; then clear; /usr/bin/menu --banner-only 2>/dev/null; fi
+BRC_EOF
+
+echo 'echo "SSH Menu (TBA)"' > /usr/bin/m-ssh; chmod +x /usr/bin/m-ssh
+echo 'echo "Features Menu (TBA)"' > /usr/bin/m-feature; chmod +x /usr/bin/m-feature
+echo 'echo "Bot Setup Menu (TBA)"' > /usr/bin/m-bot; chmod +x /usr/bin/m-bot
+
+echo -e "${YELLOW}[8/8] Memulai semua layanan...${NC}"
+systemctl daemon-reload
+systemctl enable xray nginx ws-ssh dropbear fail2ban vnstat >/dev/null 2>&1
+systemctl restart xray nginx ws-ssh dropbear fail2ban vnstat
+
+echo -e "${GREEN}====================================================${NC}"
+echo -e "${GREEN}[OK] Instalasi Cassanova Tunneling Selesai!${NC}"
+echo -e "${GREEN}====================================================${NC}"
