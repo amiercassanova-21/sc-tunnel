@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
-# CASSANOVA TUNNELING V2 - ULTIMATE AUTO-INSTALLER (FULL CODE)
-# OS Support: Ubuntu 20.04/22.04/24.04 & Debian 11/12
+# CASSANOVA TUNNELING V2 - MASTER INSTALLER (BACKEND ONLY)
+# Installer ini akan mengunduh tampilan UI & Modul murni dari GitHub Anda.
 # ==============================================================================
 
 if [[ $EUID -ne 0 ]]; then
@@ -9,7 +9,7 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'; MAGENTA='\e[1;35m'
+NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'
 clear
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "        ${GREEN}INSTALASI CASSANOVA TUNNELING V2 (MULTI-PORT)${NC}"
@@ -21,7 +21,7 @@ echo -e "${YELLOW}[1/8] Memperbarui sistem & memasang dependensi...${NC}"
 apt-get update -y >/dev/null 2>&1
 apt-get install -y jq curl wget openssl net-tools uuid-runtime vnstat dropbear nginx certbot fail2ban python3 tar gzip cron bc >/dev/null 2>&1
 
-mkdir -p /etc/xray/limit/ip /etc/xray/limit/bw /etc/xray/usage /var/log/xray /usr/local/etc/xray /etc/ssh /etc/bot /etc/dropbear /usr/bin
+mkdir -p /etc/xray/limit/ip /etc/xray/limit/bw /var/log/xray /usr/local/etc/xray /etc/ssh /etc/bot /etc/dropbear /usr/bin
 touch /etc/xray/vless.db /etc/xray/vmess.db /etc/xray/trojan.db /etc/ssh/.ssh.db
 touch /var/log/xray/access.log /var/log/xray/error.log
 chmod -R 777 /var/log/xray
@@ -84,12 +84,9 @@ LimitNOFILE=1000000
 WantedBy=multi-user.target
 SVC
 
-echo -e "${YELLOW}[3/8] Mengonfigurasi Nginx Reverse Proxy (Multi-Port 80, 443, 2096)...${NC}"
+echo -e "${YELLOW}[3/8] Mengonfigurasi Nginx Reverse Proxy (Multi-Port)...${NC}"
 cat << 'NGNX' > /etc/nginx/nginx.conf
-user www-data;
-worker_processes auto;
-pid /run/nginx.pid;
-include /etc/nginx/modules-enabled/*.conf;
+user www-data; worker_processes auto; pid /run/nginx.pid; include /etc/nginx/modules-enabled/*.conf;
 events { worker_connections 4096; multi_accept on; }
 http {
     sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65; types_hash_max_size 2048; client_max_body_size 0;
@@ -128,7 +125,7 @@ server {
 NCFG
 if ! nginx -t >/dev/null 2>&1; then sed -i 's/http2 //g' /etc/nginx/conf.d/xray.conf; fi
 
-echo -e "${YELLOW}[4/8] Membangun Engine Sentral Xray-Manager...${NC}"
+echo -e "${YELLOW}[4/8] Membangun Engine Sentral (Backend)...${NC}"
 cat << 'XMGR_EOF' > /usr/bin/xray-manager
 #!/bin/bash
 PROTO="$1"; ACTION="$2"; UPPER_PROTO=$(echo "$PROTO" | tr 'a-z' 'A-Z')
@@ -268,30 +265,7 @@ esac
 XMGR_EOF
 chmod +x /usr/bin/xray-manager
 
-for P in vless vmess trojan; do
-    UP=$(echo "$P" | tr 'a-z' 'A-Z')
-    cat << MENU_PROTO > "/usr/bin/m-${P}"
-#!/bin/bash
-trap 'echo ""; /usr/bin/menu; exit 0' SIGINT
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'; MAGENTA='\e[1;35m'
-clear
-echo -e " \${BLUE}══════════════════════════════════════════════════\${NC}\n                      \${MAGENTA}${UP}\${NC}\n \${BLUE}══════════════════════════════════════════════════\${NC}"
-echo -e "  \${GREEN}1.)\${NC} Create             \${GREEN}6.)\${NC} Modify UUID\n  \${GREEN}2.)\${NC} Create Custom      \${GREEN}7.)\${NC} Check Login\n  \${GREEN}3.)\${NC} Delete             \${GREEN}8.)\${NC} List Users\n  \${GREEN}4.)\${NC} Renew              \${GREEN}9.)\${NC} Lock\n  \${GREEN}5.)\${NC} Check Config       \${GREEN}10.)\${NC} Unlock"
-echo -e " \${BLUE}──────────────────────────────────────────────────\${NC}"
-echo -e "  \${GREEN}11.)\${NC} Edit Limit IP     \${GREEN}12.)\${NC} Edit Limit BW\n  \${RED}x.)\${NC}  Back"
-read -rp " Pilih: " OPT
-case \$OPT in
-    1) xray-manager ${P} create ;; 2) xray-manager ${P} custom ;; 3) xray-manager ${P} delete ;;
-    4) xray-manager ${P} renew ;; 5) xray-manager ${P} check-config ;; 6) xray-manager ${P} modify ;;
-    7) xray-manager ${P} cek-login ;; 8) xray-manager ${P} list ;; 9) xray-manager ${P} lock ;;
-    10) xray-manager ${P} unlock ;; 11) xray-manager ${P} limit-ip ;; 12) xray-manager ${P} limit-bw ;;
-    x|X) menu ;; *) m-${P} ;;
-esac
-MENU_PROTO
-    chmod +x "/usr/bin/m-${P}"
-done
-
-echo -e "${YELLOW}[5/8] Menetapkan Dropbear & Python WS-SSH...${NC}"
+echo -e "${YELLOW}[5/8] Menyiapkan Dropbear & Python WS-SSH...${NC}"
 [[ ! -f /etc/dropbear/dropbear_rsa_host_key ]] && dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key >/dev/null 2>&1
 cat << 'DB_SVC' > /etc/systemd/system/dropbear.service
 [Unit]
@@ -372,94 +346,47 @@ AEXP
 chmod +x /usr/bin/autokill-xray /usr/bin/auto-exp
 (crontab -l 2>/dev/null | grep -v "autokill" | grep -v "auto-exp"; echo "0 0 * * * /usr/bin/auto-exp"; echo "*/2 * * * * /usr/bin/autokill-xray") | crontab -
 
-echo -e "${YELLOW}[7/8] Menyiapkan Menu Utama & Bashrc Login...${NC}"
-cat << 'MENU_EOF' > /usr/bin/menu
-#!/bin/bash
-trap 'echo -e "\n\e[1;33mKembali ke Terminal...\e[0m"; exit 0' SIGINT
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'
-B=$(cat /etc/xray/brand.txt 2>/dev/null); [[ -z "$B" ]] && B="POTATO TUNNELING"
-O=$(grep -w PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"'); R=$(free -m | awk 'NR==2{print $3"M"}'); SWP=$(free -m | awk 'NR==3{print $2"M"}')
-I=$(curl -sS --max-time 2 https://ipv4.icanhazip.com || echo "127.0.0.1")
-D=$(cat /etc/xray/domain.txt 2>/dev/null || echo "$I")
-CTY=$(curl -sS --max-time 2 "http://ip-api.com/json/${I}" | jq -r '.city // "Singapore"' 2>/dev/null || echo "Singapore")
-ISP=$(curl -sS --max-time 2 "http://ip-api.com/json/${I}" | jq -r '.isp // "DigitalOcean"' 2>/dev/null || echo "DigitalOcean")
-UPT=$(uptime -p | sed 's/up //')
-TS=$(awk '/^### /{c++} END{print c+0}' /etc/ssh/.ssh.db 2>/dev/null || echo "0")
-TV=$(awk '/^### /{c++} END{print c+0}' /etc/xray/vmess.db 2>/dev/null || echo "0")
-TL=$(awk '/^### /{c++} END{print c+0}' /etc/xray/vless.db 2>/dev/null || echo "0")
-TT=$(awk '/^### /{c++} END{print c+0}' /etc/xray/trojan.db 2>/dev/null || echo "0")
+echo -e "${YELLOW}[7/8] Mengunduh UI Menu & Bot Telegram dari GitHub Anda...${NC}"
+REPO="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main"
+wget -qO /usr/bin/menu "${REPO}/menu.sh"
+wget -qO /usr/bin/m-vless "${REPO}/modules/m-vless.sh"
+wget -qO /usr/bin/m-vmess "${REPO}/modules/m-vmess.sh"
+wget -qO /usr/bin/m-trojan "${REPO}/modules/m-trojan.sh"
+wget -qO /usr/bin/m-ssh "${REPO}/modules/m-ssh.sh"
+wget -qO /usr/bin/m-feature "${REPO}/modules/m-feature.sh"
+wget -qO /usr/bin/m-bot "${REPO}/modules/m-bot.sh"
+wget -qO /usr/local/bin/bot-tele.py "${REPO}/bot-tele.py"
+wget -qO /usr/bin/update-sc "${REPO}/update.sh"
+chmod +x /usr/bin/menu /usr/bin/m-* /usr/bin/update-sc /usr/local/bin/bot-tele.py
 
-IFACE=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n1); IFACE=${IFACE:-eth0}
-if command -v vnstat >/dev/null 2>&1; then
-    M_DATA=$(vnstat -i "$IFACE" -m --oneline 2>/dev/null); D_DATA=$(vnstat -i "$IFACE" -d --oneline 2>/dev/null)
-    MT=$(echo "$M_DATA" | cut -d';' -f11); MRX=$(echo "$M_DATA" | cut -d';' -f9); MTX=$(echo "$M_DATA" | cut -d';' -f10)
-    DT=$(echo "$D_DATA" | cut -d';' -f6); DRX=$(echo "$D_DATA" | cut -d';' -f4); DTX=$(echo "$D_DATA" | cut -d';' -f5)
-fi
-CUR_M=$(date +%B); CUR_D=$(date +%A)
+cat << 'BOT_SVC' > /etc/systemd/system/bot-tele.service
+[Unit]
+Description=Cassanova Telegram Bot Panel
+After=network.target
 
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}   \e[41;97m               ${B}               \e[0m   ${BLUE}│${NC}"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}  OS     : ${GREEN}${O}${NC}"
-echo -e "${BLUE}│${NC}  RAM    : ${GREEN}${R}${NC}"
-echo -e "${BLUE}│${NC}  SWAP   : ${GREEN}${SWP}${NC}"
-echo -e "${BLUE}│${NC}  CITY   : ${GREEN}${CTY}${NC}"
-echo -e "${BLUE}│${NC}  ISP    : ${GREEN}${ISP}${NC}"
-echo -e "${BLUE}│${NC}  IP     : ${GREEN}${I}${NC}"
-echo -e "${BLUE}│${NC}  DOMAIN : ${GREEN}${D}${NC}"
-echo -e "${BLUE}│${NC}  UPTIME : ${GREEN}${UPT}${NC}"
-echo -e "${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC}"
-echo -e "${BLUE}│${NC}  MONTH  : ${GREEN}${MT:-0.00 GiB}${NC}          ${YELLOW}[${CUR_M}]${NC}"
-echo -e "${BLUE}│${NC}  RX     : ${GREEN}${MRX:-0.00 GiB}${NC}"
-echo -e "${BLUE}│${NC}  TX     : ${GREEN}${MTX:-0.00 GiB}${NC}"
-echo -e "${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC}"
-echo -e "${BLUE}│${NC}  DAY    : ${GREEN}${DT:-0.00 GiB}${NC}          ${YELLOW}[${CUR_D}]${NC}"
-echo -e "${BLUE}│${NC}  RX     : ${GREEN}${DRX:-0.00 GiB}${NC}"
-echo -e "${BLUE}│${NC}  TX     : ${GREEN}${DTX:-0.00 GiB}${NC}"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC} ${GREEN}XRAY:ON${NC} │ ${GREEN}SSH-WS:ON${NC} │ ${GREEN}LOADBLC:ON${NC} │     ${GREEN}GOOD${NC}     ${BLUE}│${NC}"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}                  \e[32mLIST ACCOUNTS\e[0m                   ${BLUE}│${NC}"
-echo -e "${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC} ${BLUE}│${NC}"
-printf "${BLUE}│${NC}  SSH/OPENVPN   : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TS"
-printf "${BLUE}│${NC}  VMESS         : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TV"
-printf "${BLUE}│${NC}  VLESS         : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TL"
-printf "${BLUE}│${NC}  TROJAN        : \e[33m%-3s\e[0m ACCOUNT                    ${BLUE}│${NC}\n" "$TT"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-[[ "$1" == "--banner-only" ]] && { echo -e "\n \e[31mto access use \e[32mmenu\e[31m command\e[0m\n\n \e[32mUp to date\e[0m\n"; exit 0; }
-echo -e "${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e "${BLUE}│${NC}  ${GREEN}1.)${NC} ⌨ SSH                 ${GREEN}6.)${NC} ⌨ FEATURES"
-echo -e "${BLUE}│${NC}  ${GREEN}2.)${NC} ⌨ VMESS               ${GREEN}7.)${NC} ⌨ SET REDUCE/TIME"
-echo -e "${BLUE}│${NC}  ${GREEN}3.)${NC} ⌨ VLESS               ${GREEN}8.)${NC} ⌨ SET BRAND NAME"
-echo -e "${BLUE}│${NC}  ${GREEN}4.)${NC} ⌨ TROJAN              ${GREEN}9.)${NC} ⌨ CHECK SERVICES"
-echo -e "${BLUE}│${NC}  ${GREEN}5.)${NC} ⌨ SETUP BOT           ${RED}x.)${NC} ⌨ EXIT"
-echo -e "${BLUE}└──────────────────────────────────────────────────┘${NC}"
-read -rp " Select: " OPT
-case $OPT in
-    1) m-ssh ;; 2) m-vmess ;; 3) m-vless ;; 4) m-trojan ;; 5) m-bot ;; 6) m-feature ;; x|X) exit 0 ;; *) menu ;;
-esac
-MENU_EOF
-chmod +x /usr/bin/menu
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /usr/local/bin/bot-tele.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+BOT_SVC
 
 cat << 'BRC_EOF' > /root/.bashrc
 case $- in *i*) ;; *) return;; esac
 HISTCONTROL=ignoredups:ignorespace; shopt -s histappend; HISTSIZE=1000; HISTFILESIZE=2000; shopt -s checkwinsize
 if [ -f ~/.bash_aliases ]; then . ~/.bash_aliases; fi
 PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-if [[ -f /usr/bin/menu ]]; then clear; /usr/bin/menu --banner-only 2>/dev/null; fi
+if [[ -f /usr/bin/menu ]]; then /usr/bin/menu; fi
 BRC_EOF
-
-echo 'echo "SSH Menu (TBA)"' > /usr/bin/m-ssh; chmod +x /usr/bin/m-ssh
-echo 'echo "Features Menu (TBA)"' > /usr/bin/m-feature; chmod +x /usr/bin/m-feature
-echo 'echo "Bot Setup Menu (TBA)"' > /usr/bin/m-bot; chmod +x /usr/bin/m-bot
 
 echo -e "${YELLOW}[8/8] Memulai semua layanan...${NC}"
 systemctl daemon-reload
-systemctl enable xray nginx ws-ssh dropbear fail2ban vnstat >/dev/null 2>&1
-systemctl restart xray nginx ws-ssh dropbear fail2ban vnstat
+systemctl enable xray nginx ws-ssh dropbear fail2ban vnstat bot-tele >/dev/null 2>&1
+systemctl restart xray nginx ws-ssh dropbear fail2ban vnstat bot-tele
 
 echo -e "${GREEN}====================================================${NC}"
 echo -e "${GREEN}[OK] Instalasi Cassanova Tunneling Selesai!${NC}"
