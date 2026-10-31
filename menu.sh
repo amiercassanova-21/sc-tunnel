@@ -1,3 +1,8 @@
+cat << 'FIX_TOTAL' > /root/fix-total.sh
+#!/bin/bash
+NC='\e[0m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'
+
+echo -e "${YELLOW}Memperbaiki file menu lokal di VPS...${NC}"
 cat << 'MENU_EOF' > /usr/bin/menu
 #!/bin/bash
 trap 'echo -e "\n\e[1;33mKeluar dari Menu ke Terminal Utama...\e[0m"; exit 0' SIGINT
@@ -5,9 +10,6 @@ printf "\033[2J\033[H\033[3J"
 
 NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; WHITE='\e[1;37m'; CYAN='\e[1;36m'
 
-# ==========================================
-# GATHERING SYSTEM INFO
-# ==========================================
 OS_NAME=$(grep -w PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"')
 UPTIME=$(uptime -p | sed 's/up //')
 RAM_USED=$(free -m | awk 'NR==2{print $3}')
@@ -65,17 +67,11 @@ fi
 [[ -z "$DAY_TX" || "$DAY_TX" == *"*"* ]] && DAY_TX="0.00 GiB"
 [[ -z "$TRAFFIC" ]] && TRAFFIC="0.00 Mbit/s"
 
-# ==========================================
-# CLIENT & LICENSE INFO (DYNAMIC)
-# ==========================================
 VERSION="v.1.0.0 cstun"
 ORDER_BY=$(cat /etc/xray/order.txt 2>/dev/null || echo "Cassanova VIP")
 CLIENT_NAME=$(cat /etc/xray/client.txt 2>/dev/null || echo "$(hostname)")
 EXP_DAYS=$(cat /etc/xray/exp.txt 2>/dev/null || echo "Lifetime")
 
-# ==========================================
-# MENU UI RENDERING
-# ==========================================
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}       ${RED}█▀▀ █▀█ █▀▀ █▀▀ █▀█ █▄ █ █▀█ █ █ █▀█${NC}       ${BLUE}│${NC}"
 echo -e " ${BLUE}│${NC}       ${WHITE}█▄▄ █▀█ ▄██ ▄██ █▀█ █ ▀█ █▄█ ▀▄▀ █▀█${NC}       ${BLUE}│${NC}"
@@ -141,3 +137,17 @@ case $OPTION in
 esac
 MENU_EOF
 chmod +x /usr/bin/menu
+
+echo -e "${YELLOW}Membersihkan duplikasi bashrc...${NC}"
+cat << 'BRC' > /root/.bashrc
+case $- in *i*) ;; *) return;; esac
+HISTCONTROL=ignoredups:ignorespace; shopt -s histappend; HISTSIZE=1000; HISTFILESIZE=2000; shopt -s checkwinsize
+if [ -f ~/.bash_aliases ]; then . ~/.bash_aliases; fi
+PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+if [[ -f /usr/bin/menu ]]; then /usr/bin/menu; fi
+BRC
+
+echo -e "${GREEN}Perbaikan Selesai! Ketik 'menu' untuk melihat hasilnya.${NC}"
+FIX_TOTAL
+bash /root/fix-total.sh
+rm -f /root/fix-total.sh
