@@ -24,7 +24,7 @@ DOMAIN=$(cat /etc/xray/domain.txt 2>/dev/null | tr -d '[:space:]')
 STATUS_XRAY=$(systemctl is-active --quiet xray && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
 STATUS_SSH=$(systemctl is-active --quiet ws-ssh && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
 STATUS_BBR=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" && echo -e "${GREEN}ON${NC}" || echo -e "${GREEN}ON${NC}")
-STATUS_F2B=$(systemctl is-active --quiet fail2ban 2>/dev/null && echo -e "${GREEN}ON${NC}" || echo -e "${GREEN}ON${NC}")
+STATUS_F2B=$(systemctl is-active --quiet fail2ban 2>/dev/null && echo -e "${GREEN}ON${NC}" || echo -e "${RED}OFF${NC}")
 
 TOTAL_SSH=$(grep -E "^### " /etc/ssh/.ssh.db 2>/dev/null | wc -l)
 TOTAL_VMESS=$(grep -E "^### " /etc/xray/vmess.db 2>/dev/null | wc -l)
@@ -89,11 +89,11 @@ echo -e " ${BLUE}│${NC} ${GREEN}ISP${NC}      : ${ISP}"
 echo -e " ${BLUE}│${NC} ${GREEN}IP${NC}       : ${IP_VPS}"
 echo -e " ${BLUE}│${NC} ${GREEN}DOMAIN${NC}   : ${DOMAIN}"
 echo -e " ${BLUE}│${NC} ${GREEN}UPTIME${NC}   : ${UPTIME}"
-echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC}"
+echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC} ${BLUE}│${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}MONTH${NC}    : ${MONTH_TOTAL}          ${YELLOW}[${CURR_MONTH}]${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}RX${NC}       : ${MONTH_RX}"
 echo -e " ${BLUE}│${NC} ${GREEN}TX${NC}       : ${MONTH_TX}"
-echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC}"
+echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC} ${BLUE}│${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}DAY${NC}      : ${DAY_TOTAL}          ${YELLOW}[${CURR_DAY}]${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}RX${NC}       : ${DAY_RX}"
 echo -e " ${BLUE}│${NC} ${GREEN}TX${NC}       : ${DAY_TX}"
