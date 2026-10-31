@@ -26,7 +26,6 @@ STATUS_SSH=$(systemctl is-active --quiet ws-ssh && echo -e "${GREEN}ON${NC}" || 
 STATUS_BBR=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr" && echo -e "${GREEN}ON${NC}" || echo -e "${GREEN}ON${NC}")
 STATUS_F2B=$(systemctl is-active --quiet fail2ban 2>/dev/null && echo -e "${GREEN}ON${NC}" || echo -e "${GREEN}ON${NC}")
 
-# FIX LIST ACCOUNTS: Menggunakan wc -l agar mutlak 1 baris angka tanpa bug newline
 TOTAL_SSH=$(grep -E "^### " /etc/ssh/.ssh.db 2>/dev/null | wc -l)
 TOTAL_VMESS=$(grep -E "^### " /etc/xray/vmess.db 2>/dev/null | wc -l)
 TOTAL_VLESS=$(grep -E "^### " /etc/xray/vless.db 2>/dev/null | wc -l)
@@ -47,7 +46,6 @@ if command -v vnstat >/dev/null 2>&1; then
     DAY_RX=$(echo "$D_DATA" | cut -d';' -f4)
     DAY_TX=$(echo "$D_DATA" | cut -d';' -f5)
     
-    # Kalkulasi Traffic (1 Detik Interval)
     RX1=$(cat /sys/class/net/$IFACE/statistics/rx_bytes 2>/dev/null || echo 0)
     TX1=$(cat /sys/class/net/$IFACE/statistics/tx_bytes 2>/dev/null || echo 0)
     sleep 1
@@ -67,10 +65,13 @@ fi
 [[ -z "$DAY_TX" || "$DAY_TX" == *"*"* ]] && DAY_TX="0.00 GiB"
 [[ -z "$TRAFFIC" ]] && TRAFFIC="0.00 Mbit/s"
 
-ORDER_BY="Amiruddin"
-CLIENT_NAME="Novi5"
-EXP_DAYS="22 Days"
-VERSION="SPv07.01.26"
+# ==========================================
+# CLIENT & LICENSE INFO (DYNAMIC)
+# ==========================================
+VERSION="v.1.0.0 cstun"
+ORDER_BY=$(cat /etc/xray/order.txt 2>/dev/null || echo "Cassanova VIP")
+CLIENT_NAME=$(cat /etc/xray/client.txt 2>/dev/null || echo "$(hostname)")
+EXP_DAYS=$(cat /etc/xray/exp.txt 2>/dev/null || echo "Lifetime")
 
 # ==========================================
 # MENU UI RENDERING
