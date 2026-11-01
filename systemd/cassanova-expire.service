@@ -1,0 +1,9 @@
+[Unit]
+Description=Cassanova Xray Account Expiry Reconciliation
+After=network.target xray.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/cassanova-expire
+UMask=0077

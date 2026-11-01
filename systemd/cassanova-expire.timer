@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Cassanova Xray Account Expiry Check
+
+[Timer]
+OnCalendar=*-*-* 00:15:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=cassanova-expire.service
+
+[Install]
+WantedBy=timers.target

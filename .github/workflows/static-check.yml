@@ -1,0 +1,18 @@
+name: Static validation
+on:
+  push:
+  pull_request:
+
+jobs:
+  static-check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python
+        run: sudo apt-get update && sudo apt-get install -y python3
+      - name: Validate shell and Python syntax
+        run: bash tests/static-check.sh

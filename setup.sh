@@ -9,22 +9,127 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# Dukungan OS: Ubuntu 22.04+ dan Debian 12+ (termasuk rilis mayor berikutnya).
+if [[ ! -r /etc/os-release ]]; then
+    echo "[ERROR] Tidak dapat membaca /etc/os-release. OS tidak dikenali."
+    exit 1
+fi
+. /etc/os-release
+OS_ID="${ID,,}"
+OS_VERSION="${VERSION_ID:-0}"
+OS_MAJOR="${OS_VERSION%%.*}"
+case "$OS_ID" in
+    ubuntu)
+        OS_MINOR="${OS_VERSION#*.}"
+        OS_MINOR="${OS_MINOR%%.*}"
+        if [[ ! "$OS_MAJOR" =~ ^[0-9]+$ || ! "$OS_MINOR" =~ ^[0-9]+$ ]] || (( OS_MAJOR < 22 )) || { (( OS_MAJOR == 22 )) && (( 10#$OS_MINOR < 4 )); }; then
+            echo "[ERROR] Ubuntu 22.04 atau lebih baru diperlukan. Terdeteksi: $PRETTY_NAME"
+            exit 1
+        fi
+        ;;
+    debian)
+        if [[ ! "$OS_MAJOR" =~ ^[0-9]+$ ]] || (( OS_MAJOR < 12 )); then
+            echo "[ERROR] Debian 12 atau lebih baru diperlukan. Terdeteksi: $PRETTY_NAME"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "[ERROR] OS tidak didukung: ${PRETTY_NAME:-$OS_ID}. Hanya Ubuntu 22.04+ dan Debian 12+ yang didukung."
+        exit 1
+        ;;
+esac
+
+if ! command -v apt-get >/dev/null 2>&1; then
+    echo "[ERROR] apt-get tidak ditemukan. Installer ini khusus Ubuntu/Debian."
+    exit 1
+fi
+
 NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'
 clear
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 echo -e "        ${GREEN}INSTALASI CASSANOVA TUNNELING V2 (MULTI-PORT)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 read -rp " Masukkan Domain VPS Anda (Kosongkan = Pakai IP): " INPUT_DOM
+if [[ -n "$INPUT_DOM" && ! "$INPUT_DOM" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    echo "[ERROR] Format domain tidak valid. Gunakan nama domain tanpa skema/port."
+    exit 1
+fi
+
+# Simpan snapshot konfigurasi yang mungkin disentuh sebelum instalasi.
+BACKUP_DIR="/var/backups/cassanova/pre-install-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p -m 0700 "$BACKUP_DIR"
+BACKUP_PATHS=()
+for path in etc/nginx/nginx.conf etc/nginx/conf.d/xray.conf etc/nginx/conf.d/cassanova-xray.conf \
+            etc/xray etc/sing-box usr/local/etc/xray etc/ssh/.ssh.db etc/dropbear \
+            etc/apt/keyrings/sagernet.asc etc/apt/sources.list.d/sagernet.sources \
+            etc/shells etc/systemd/system/xray.service etc/systemd/system/dropbear.service \
+            etc/systemd/system/cassanova-dropbear.service etc/systemd/system/ws-ssh.service \
+            etc/systemd/system/bot-tele.service etc/systemd/system/cassanova-bandwidth.service etc/systemd/system/cassanova-bandwidth.timer etc/bot usr/bin/menu usr/bin/m-ssh \
+            usr/bin/m-vless usr/bin/m-vmess usr/bin/m-trojan usr/bin/m-hysteria2 \
+            usr/bin/m-feature usr/bin/m-bot usr/bin/xray-manager usr/bin/hy2-manager usr/bin/cassanova-service usr/bin/cassanova-bandwidth \
+            usr/bin/update-sc usr/bin/cassanova-ssh-expire var/lib/cassanova/bandwidth-xray.json usr/local/bin/bot-tele.py usr/local/share/cassanova root/.bashrc; do
+    [[ -e "/$path" || -L "/$path" ]] && BACKUP_PATHS+=("$path")
+done
+if ((${#BACKUP_PATHS[@]})); then
+    tar -czpf "$BACKUP_DIR/pre-install.tar.gz" -C / "${BACKUP_PATHS[@]}" || {
+        echo "[ERROR] Gagal membuat snapshot konfigurasi. Instalasi dibatalkan."; exit 1;
+    }
+    chmod 0600 "$BACKUP_DIR/pre-install.tar.gz"
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 echo -e "${YELLOW}[1/8] Memperbarui sistem & memasang dependensi...${NC}"
-apt-get update -y >/dev/null 2>&1
-apt-get install -y jq curl wget openssl net-tools uuid-runtime vnstat dropbear nginx certbot fail2ban python3 tar gzip cron bc >/dev/null 2>&1
+if ! apt-get update -y; then
+    echo -e "${RED}[ERROR] apt-get update gagal. Periksa koneksi dan repository OS.${NC}"
+    exit 1
+fi
+if ! apt-get install -y jq curl wget openssl net-tools uuid-runtime vnstat dropbear nginx certbot fail2ban python3 tar gzip cron bc; then
+    echo -e "${RED}[ERROR] Instalasi dependensi gagal. Tidak melanjutkan konfigurasi.${NC}"
+    exit 1
+fi
+
+# Hysteria2 backend: sing-box (official signed APT repository).
+echo -e "${YELLOW}[1b/8] Memasang sing-box untuk Hysteria2...${NC}"
+install -d -m 0755 /etc/apt/keyrings
+if ! curl -fsSL --retry 3 https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc; then
+    echo -e "${RED}[ERROR] Gagal mengambil signing key resmi sing-box.${NC}"; exit 1
+fi
+chmod 0644 /etc/apt/keyrings/sagernet.asc
+cat > /etc/apt/sources.list.d/sagernet.sources <<'SBOX_REPO'
+Types: deb
+URIs: https://deb.sagernet.org/
+Suites: *
+Components: *
+Enabled: yes
+Signed-By: /etc/apt/keyrings/sagernet.asc
+SBOX_REPO
+if ! apt-get update -y || ! apt-get install -y sing-box; then
+    echo -e "${RED}[ERROR] Instalasi sing-box gagal. Hysteria2 tidak dapat diaktifkan.${NC}"; exit 1
+fi
+command -v sing-box >/dev/null 2>&1 || { echo "[ERROR] Binary sing-box tidak ditemukan."; exit 1; }
 
 mkdir -p /etc/xray/limit/ip /etc/xray/limit/bw /var/log/xray /usr/local/etc/xray /etc/ssh /etc/bot /etc/dropbear /usr/bin
 touch /etc/xray/vless.db /etc/xray/vmess.db /etc/xray/trojan.db /etc/ssh/.ssh.db
+if ! getent group sing-box >/dev/null 2>&1; then groupadd --system sing-box; fi
+if ! getent passwd sing-box >/dev/null 2>&1; then
+    useradd --system --gid sing-box --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sing-box
+fi
+install -d -o root -g sing-box -m 0750 /etc/sing-box /var/backups/cassanova/hysteria2
+if [[ ! -s /etc/sing-box/users.json ]]; then printf '[]\n' > /etc/sing-box/users.json; fi
+chown root:root /etc/sing-box/users.json; chmod 0600 /etc/sing-box/users.json
+if [[ ! -s /etc/sing-box/config.json ]]; then
+    cat > /etc/sing-box/config.json <<'SBOX_EMPTY'
+{
+  "log": { "level": "warn" },
+  "inbounds": [],
+  "outbounds": [{ "type": "direct", "tag": "direct" }]
+}
+SBOX_EMPTY
+fi
+chown root:sing-box /etc/sing-box/config.json; chmod 0640 /etc/sing-box/config.json
 touch /var/log/xray/access.log /var/log/xray/error.log
-chmod -R 777 /var/log/xray
+chmod 750 /var/log/xray
+chmod 640 /var/log/xray/access.log /var/log/xray/error.log
 
 MY_IP=$(curl -sS --max-time 5 https://ipv4.icanhazip.com || echo "127.0.0.1")
 DOMAIN="${INPUT_DOM:-$MY_IP}"
@@ -33,8 +138,7 @@ echo "$DOMAIN" > /etc/xray/sni.txt
 echo "POTATO TUNNELING" > /etc/xray/brand.txt
 
 echo -e "${YELLOW}[2/8] Menyiapkan SSL & Instalasi Xray-Core...${NC}"
-systemctl stop nginx 2>/dev/null || true
-if [[ "$DOMAIN" != "$MY_IP" ]]; then
+if [[ "$DOMAIN" != "$MY_IP" && "$DOMAIN" != "127.0.0.1" ]] && ! ss -ltnH '( sport = :80 )' | grep -q .; then
     certbot certonly --standalone --agree-tos --register-unsafely-without-email -d "$DOMAIN" --non-interactive 2>/dev/null || true
 fi
 if [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
@@ -43,16 +147,37 @@ if [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]]; then
 else
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 -keyout /etc/xray/xray.key -out /etc/xray/xray.crt -subj "/C=ID/ST=Jakarta/L=Jakarta/O=Cassanova/CN=${DOMAIN}" >/dev/null 2>&1
 fi
-chmod 644 /etc/xray/xray.crt /etc/xray/xray.key
+chmod 644 /etc/xray/xray.crt
+chmod 600 /etc/xray/xray.key
+chown root:root /etc/xray/xray.crt /etc/xray/xray.key
 
 if ! command -v xray >/dev/null 2>&1; then
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install >/dev/null 2>&1
+    XRAY_INSTALLER=$(mktemp)
+    if ! curl -fL --retry 3 --connect-timeout 15 https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o "$XRAY_INSTALLER"; then
+        rm -f "$XRAY_INSTALLER"
+        echo -e "${RED}[ERROR] Gagal mengunduh installer Xray.${NC}"
+        exit 1
+    fi
+    if ! bash "$XRAY_INSTALLER" install; then
+        rm -f "$XRAY_INSTALLER"
+        echo -e "${RED}[ERROR] Instalasi Xray gagal.${NC}"
+        exit 1
+    fi
+    rm -f "$XRAY_INSTALLER"
+fi
+if ! command -v xray >/dev/null 2>&1; then
+    echo -e "${RED}[ERROR] Binary Xray tidak ditemukan setelah instalasi.${NC}"
+    exit 1
 fi
 
 cat << 'XCFG' > /usr/local/etc/xray/config.json
 {
   "log": { "access": "/var/log/xray/access.log", "error": "/var/log/xray/error.log", "loglevel": "warning" },
+  "api": { "tag": "api", "services": ["HandlerService", "StatsService"] },
+  "stats": {},
+  "policy": { "levels": { "0": { "statsUserUplink": true, "statsUserDownlink": true } } },
   "inbounds": [
+    { "tag": "api-in", "listen": "127.0.0.1", "port": 10085, "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" } },
     { "tag": "vless-ws", "port": 10001, "listen": "127.0.0.1", "protocol": "vless", "settings": { "clients": [], "decryption": "none" }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vless" } } },
     { "tag": "vmess-ws", "port": 10002, "listen": "127.0.0.1", "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/vmess" } } },
     { "tag": "trojan-ws", "port": 10003, "listen": "127.0.0.1", "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "ws", "wsSettings": { "path": "/trojan" } } },
@@ -66,7 +191,8 @@ cat << 'XCFG' > /usr/local/etc/xray/config.json
     { "tag": "vmess-xh", "port": 10011, "listen": "127.0.0.1", "protocol": "vmess", "settings": { "clients": [] }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/xhvmess" } } },
     { "tag": "trojan-xh", "port": 10012, "listen": "127.0.0.1", "protocol": "trojan", "settings": { "clients": [] }, "streamSettings": { "network": "xhttp", "xhttpSettings": { "path": "/xhtrojan" } } }
   ],
-  "outbounds": [ { "protocol": "freedom", "tag": "direct" }, { "protocol": "blackhole", "tag": "blocked" } ]
+  "outbounds": [ { "protocol": "freedom", "tag": "direct" }, { "protocol": "blackhole", "tag": "blocked" }, { "protocol": "freedom", "tag": "api" } ],
+  "routing": { "rules": [ { "type": "field", "inboundTag": ["api-in"], "outboundTag": "api" } ] }
 }
 XCFG
 
@@ -85,279 +211,183 @@ WantedBy=multi-user.target
 SVC
 
 echo -e "${YELLOW}[3/8] Mengonfigurasi Nginx Reverse Proxy (Multi-Port)...${NC}"
-cat << 'NGNX' > /etc/nginx/nginx.conf
-user www-data; worker_processes auto; pid /run/nginx.pid; include /etc/nginx/modules-enabled/*.conf;
-events { worker_connections 4096; multi_accept on; }
-http {
-    sendfile on; tcp_nopush on; tcp_nodelay on; keepalive_timeout 65; types_hash_max_size 2048; client_max_body_size 0;
-    include /etc/nginx/mime.types; default_type application/octet-stream;
-    map $http_upgrade $connection_upgrade { default upgrade; '' close; }
-    include /etc/nginx/conf.d/*.conf;
-}
-NGNX
-rm -f /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf
-cat << 'NCFG' > /etc/nginx/conf.d/xray.conf
+# Jangan menimpa nginx.conf atau konfigurasi situs milik administrator.
+# Cassanova hanya memasang satu drop-in yang menjadi miliknya sendiri.
+NGINX_PANEL_CONF="/etc/nginx/conf.d/cassanova-xray.conf"
+cat << 'NCFG' > "$NGINX_PANEL_CONF"
 server {
-    listen 80 default_server; listen [::]:80 default_server;
-    listen 443 ssl http2 default_server; listen [::]:443 ssl http2 default_server;
-    listen 2096 ssl http2 default_server; listen [::]:2096 ssl http2 default_server;
+    listen 80;
+    listen [::]:80;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    listen 2096 ssl http2;
+    listen [::]:2096 ssl http2;
     server_name _;
-    ssl_certificate /etc/xray/xray.crt; ssl_certificate_key /etc/xray/xray.key;
-    ssl_protocols TLSv1.2 TLSv1.3; ssl_ciphers HIGH:!aNULL:!MD5;
-    
-    location / {
-        if ($http_upgrade ~* "websocket") { proxy_pass http://127.0.0.1:10015; break; }
-        default_type text/html; return 200 "<h1>CASSANOVA ENGINE ACTIVE</h1>";
-    }
-    location = /vless { proxy_redirect off; proxy_pass http://127.0.0.1:10001; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
-    location = /vmess { proxy_redirect off; proxy_pass http://127.0.0.1:10002; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
-    location = /trojan { proxy_redirect off; proxy_pass http://127.0.0.1:10003; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
-    location ^~ /vless-grpc { proxy_redirect off; grpc_pass grpc://127.0.0.1:10004; grpc_set_header Host $http_host; grpc_read_timeout 86400s; }
-    location ^~ /vmess-grpc { proxy_redirect off; grpc_pass grpc://127.0.0.1:10005; grpc_set_header Host $http_host; grpc_read_timeout 86400s; }
-    location ^~ /trojan-grpc { proxy_redirect off; grpc_pass grpc://127.0.0.1:10006; grpc_set_header Host $http_host; grpc_read_timeout 86400s; }
-    location ^~ /upvless { proxy_redirect off; proxy_pass http://127.0.0.1:10007; proxy_http_version 1.1; proxy_buffering off; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
-    location ^~ /upvmess { proxy_redirect off; proxy_pass http://127.0.0.1:10008; proxy_http_version 1.1; proxy_buffering off; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
-    location ^~ /uptrojan { proxy_redirect off; proxy_pass http://127.0.0.1:10009; proxy_http_version 1.1; proxy_buffering off; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
-    location ^~ /xhvless { proxy_redirect off; proxy_pass http://127.0.0.1:10010; proxy_http_version 1.1; proxy_buffering off; proxy_request_buffering off; proxy_set_header Connection ""; proxy_set_header Host $host; }
-    location ^~ /xhvmess { proxy_redirect off; proxy_pass http://127.0.0.1:10011; proxy_http_version 1.1; proxy_buffering off; proxy_request_buffering off; proxy_set_header Connection ""; proxy_set_header Host $host; }
-    location ^~ /xhtrojan { proxy_redirect off; proxy_pass http://127.0.0.1:10012; proxy_http_version 1.1; proxy_buffering off; proxy_request_buffering off; proxy_set_header Connection ""; proxy_set_header Host $host; }
+    ssl_certificate /etc/xray/xray.crt;
+    ssl_certificate_key /etc/xray/xray.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    location / { default_type text/html; return 200 "<h1>CASSANOVA ENGINE ACTIVE</h1>"; }
+    location = /vless { proxy_pass http://127.0.0.1:10001; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
+    location = /vmess { proxy_pass http://127.0.0.1:10002; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
+    location = /trojan { proxy_pass http://127.0.0.1:10003; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
+    location ^~ /vless-grpc { grpc_pass grpc://127.0.0.1:10004; grpc_set_header Host $http_host; grpc_read_timeout 86400s; }
+    location ^~ /vmess-grpc { grpc_pass grpc://127.0.0.1:10005; grpc_set_header Host $http_host; grpc_read_timeout 86400s; }
+    location ^~ /trojan-grpc { grpc_pass grpc://127.0.0.1:10006; grpc_set_header Host $http_host; grpc_read_timeout 86400s; }
+    location ^~ /upvless { proxy_pass http://127.0.0.1:10007; proxy_http_version 1.1; proxy_buffering off; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
+    location ^~ /upvmess { proxy_pass http://127.0.0.1:10008; proxy_http_version 1.1; proxy_buffering off; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
+    location ^~ /uptrojan { proxy_pass http://127.0.0.1:10009; proxy_http_version 1.1; proxy_buffering off; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; }
+    location ^~ /xhvless { proxy_pass http://127.0.0.1:10010; proxy_http_version 1.1; proxy_buffering off; proxy_request_buffering off; proxy_set_header Connection ""; proxy_set_header Host $host; }
+    location ^~ /xhvmess { proxy_pass http://127.0.0.1:10011; proxy_http_version 1.1; proxy_buffering off; proxy_request_buffering off; proxy_set_header Connection ""; proxy_set_header Host $host; }
+    location ^~ /xhtrojan { proxy_pass http://127.0.0.1:10012; proxy_http_version 1.1; proxy_buffering off; proxy_request_buffering off; proxy_set_header Connection ""; proxy_set_header Host $host; }
 }
 NCFG
-if ! nginx -t >/dev/null 2>&1; then sed -i 's/http2 //g' /etc/nginx/conf.d/xray.conf; fi
+if [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
+    sed -i "s/server_name _;/server_name ${DOMAIN};/" "$NGINX_PANEL_CONF"
+fi
+if ! nginx -t; then
+    echo "[ERROR] Konfigurasi Nginx tidak valid. File konfigurasi lain tidak disentuh. Periksa $NGINX_PANEL_CONF dan snapshot $BACKUP_DIR."
+    exit 1
+fi
 
 echo -e "${YELLOW}[4/8] Membangun Engine Sentral (Backend)...${NC}"
-cat << 'XMGR_EOF' > /usr/bin/xray-manager
-#!/bin/bash
-PROTO="$1"; ACTION="$2"; UPPER_PROTO=$(echo "$PROTO" | tr 'a-z' 'A-Z')
-DB_FILE="/etc/xray/${PROTO}.db"; CONFIG="/usr/local/etc/xray/config.json"
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'
-
-inject_user() {
-    local tmp=$(mktemp)
-    if [[ "$PROTO" == "trojan" ]]; then
-        jq --arg p "$PROTO" --arg pw "$2" --arg u "$1" '(.inbounds[] | select(.protocol==$p) | .settings.clients) |= map(select(.email != $u)) | (.inbounds[] | select(.protocol==$p) | .settings.clients) += [{"password": $pw, "email": $u}]' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-    else
-        jq --arg p "$PROTO" --arg id "$2" --arg u "$1" '(.inbounds[] | select(.protocol==$p) | .settings.clients) |= map(select(.email != $u)) | (.inbounds[] | select(.protocol==$p) | .settings.clients) += [{"id": $id, "email": $u}]' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-    fi
-}
-remove_user() {
-    local tmp=$(mktemp)
-    jq --arg p "$PROTO" --arg u "$1" '(.inbounds[] | select(.protocol==$p) | .settings.clients) |= map(select(.email != $u))' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
-}
-print_6_links() {
-    local user="$1"; local cred="$2"; local exp="$3"; local days="$4"
-    local domain=$(cat /etc/xray/domain.txt 2>/dev/null); local sni=$(cat /etc/xray/sni.txt 2>/dev/null); [[ -z "$sni" ]] && sni="$domain"
-    local lim=$(cat "/etc/xray/limit/ip/${PROTO}_${user}" 2>/dev/null || echo "2"); local bw=$(cat "/etc/xray/limit/bw/${PROTO}_${user}" 2>/dev/null || echo "0")
-    local ip_lbl="$lim"; [[ "$lim" == "0" ]] && ip_lbl="Unli"
-    local bw_lbl="${bw} GB"; [[ "$bw" == "0" ]] && bw_lbl="Unlimited"
-    local rem="${user}%E3%80%8A${ip_lbl}%E3%80%8B%F0%9F%94%B5"
-    if [[ "$PROTO" == "vless" ]]; then
-        LT="vless://${cred}@${domain}:443?path=%2Fvless&security=tls&encryption=none&host=${sni}&type=ws&sni=${sni}#${rem}"
-        LNT="vless://${cred}@${domain}:80?path=%2Fvless&security=none&encryption=none&host=${sni}&type=ws#${rem}"
-        LG="vless://${cred}@${domain}:443?mode=gun&security=tls&encryption=none&type=grpc&serviceName=vless-grpc&sni=${sni}#${rem}"
-        LU="vless://${cred}@${domain}:443?path=%2Fupvless&security=tls&encryption=none&host=${sni}&type=httpupgrade&sni=${sni}#${rem}"
-        LX="vless://${cred}@${domain}:2096?path=%2Fxhvless&security=tls&encryption=none&host=${sni}&type=xhttp&fp=chrome&sni=${sni}#${rem}"
-    elif [[ "$PROTO" == "trojan" ]]; then
-        LT="trojan://${cred}@${domain}:443?path=%2Ftrojan&security=tls&host=${sni}&type=ws&sni=${sni}#${rem}"
-        LNT="trojan://${cred}@${domain}:80?path=%2Ftrojan&security=none&host=${sni}&type=ws#${rem}"
-        LG="trojan://${cred}@${domain}:443?mode=gun&security=tls&type=grpc&serviceName=trojan-grpc&sni=${sni}#${rem}"
-        LU="trojan://${cred}@${domain}:443?path=%2Fuptrojan&security=tls&host=${sni}&type=httpupgrade&sni=${sni}#${rem}"
-        LX="trojan://${cred}@${domain}:2096?path=%2Fxhtrojan&security=tls&host=${sni}&type=xhttp&fp=chrome&sni=${sni}#${rem}"
-    else
-        local rp="${user}《${ip_lbl}》🔵"; local b64="base64 -w 0"
-        LT="vmess://$(jq -n --arg ps "$rp" --arg add "$domain" --arg id "$cred" --arg h "$sni" '{v:"2",ps:$ps,add:$add,port:"443",id:$id,aid:"0",scy:"auto",net:"ws",type:"none",host:$h,path:"/vmess",tls:"tls",sni:$h}' | $b64)"
-        LNT="vmess://$(jq -n --arg ps "$rp" --arg add "$domain" --arg id "$cred" --arg h "$sni" '{v:"2",ps:$ps,add:$add,port:"80",id:$id,aid:"0",scy:"auto",net:"ws",type:"none",host:$h,path:"/vmess",tls:"none"}' | $b64)"
-        LG="vmess://$(jq -n --arg ps "$rp" --arg add "$domain" --arg id "$cred" --arg h "$sni" '{v:"2",ps:$ps,add:$add,port:"443",id:$id,aid:"0",scy:"auto",net:"grpc",type:"gun",host:$h,path:"vmess-grpc",tls:"tls",sni:$h}' | $b64)"
-        LU="vmess://$(jq -n --arg ps "$rp" --arg add "$domain" --arg id "$cred" --arg h "$sni" '{v:"2",ps:$ps,add:$add,port:"443",id:$id,aid:"0",scy:"auto",net:"httpupgrade",type:"none",host:$h,path:"/upvmess",tls:"tls",sni:$h}' | $b64)"
-        LX="vmess://$(jq -n --arg ps "$rp" --arg add "$domain" --arg id "$cred" --arg h "$sni" '{v:"2",ps:$ps,add:$add,port:"2096",id:$id,aid:"0",scy:"auto",net:"xhttp",type:"none",host:$h,path:"/xhvmess",tls:"tls",sni:$h,fp:"chrome"}' | $b64)"
-    fi
-    clear
-    echo -e "             ${GREEN}${UPPER_PROTO}${NC}\n ${BLUE}────────────────────────────────${NC}"
-    echo -e " Remarks      : ${CYAN}${user}${NC}\n Host / SNI   : ${GREEN}${sni}${NC}\n UUID / Pass  : ${YELLOW}${cred}${NC}"
-    echo -e " Limit        : ${CYAN}${ip_lbl} IP${NC} | Quota: ${CYAN}${bw_lbl}${NC}\n Expired      : ${RED}${exp}${NC} (${days})\n ${BLUE}────────────────────────────────${NC}"
-    echo -e " ${YELLOW}WS TLS${NC}:\n${LT}\n ${BLUE}────────────────────────────────${NC}"
-    echo -e " ${YELLOW}WS NON-TLS${NC}:\n${LNT}\n ${BLUE}────────────────────────────────${NC}"
-    echo -e " ${YELLOW}GRPC${NC}:\n${LG}\n ${BLUE}────────────────────────────────${NC}"
-    echo -e " ${YELLOW}HTTP UPGRADE${NC}:\n${LU}\n ${BLUE}────────────────────────────────${NC}"
-    echo -e " ${YELLOW}XHTTP${NC}:\n${LX}\n ${BLUE}────────────────────────────────${NC}"
-}
-case "$ACTION" in
-    create|custom)
-        read -rp " Username : " U; U=$(echo "$U"|tr -d '[:space:]'); grep -q "^### ${U} " "$DB_FILE" && exit 1
-        if [[ "$ACTION" == "custom" ]]; then
-            read -rp " Custom UUID/Pass : " C; C=$(echo "$C"|tr -d '[:space:]')
-            [[ -z "$C" ]] && C=$(cat /proc/sys/kernel/random/uuid)
-            [[ "$PROTO" != "trojan" && ! "$C" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] && C=$(uuidgen --sha1 --namespace @dns --name "$C" 2>/dev/null)
-        else
-            C=$(cat /proc/sys/kernel/random/uuid)
-        fi
-        read -rp " Hari : " D; read -rp " Limit IP (0=Unli) : " LIM; read -rp " Limit GB (0=Unli) : " BW
-        [[ ! "$D" =~ ^[0-9]+$ ]] && D=30; [[ ! "$LIM" =~ ^[0-9]+$ ]] && LIM=2; [[ ! "$BW" =~ ^[0-9]+$ ]] && BW=0
-        E=$(date -d "+${D} days" +"%Y-%m-%d")
-        echo "$LIM" > "/etc/xray/limit/ip/${PROTO}_${U}"; echo "$BW" > "/etc/xray/limit/bw/${PROTO}_${U}"
-        inject_user "$U" "$C"; echo "### $U $E $C unlocked" >> "$DB_FILE"; systemctl restart xray
-        print_6_links "$U" "$C" "$E" "${D} Days"; read -n1 -srp "Enter..."
-        ;;
-    delete|renew|modify|check-config)
-        grep -E "^### " "$DB_FILE" | awk '{print $2, $3, $5}' | nl -s ') '
-        read -rp " Input Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### " "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
-        DATA=$(grep -E "^### ${U} " "$DB_FILE"); [[ -z "$DATA" ]] && exit 1
-        E=$(echo "$DATA" | awk '{print $3}'); C=$(echo "$DATA" | awk '{print $4}'); ST=$(echo "$DATA" | awk '{print $5}')
-        if [[ "$ACTION" == "delete" ]]; then
-            sed -i "/^### ${U} /d" "$DB_FILE"; remove_user "$U"; systemctl restart xray; echo -e "${GREEN}Deleted!${NC}"; sleep 1
-        elif [[ "$ACTION" == "renew" ]]; then
-            read -rp " Tambah Hari: " D; [[ ! "$D" =~ ^[0-9]+$ ]] && D=30
-            NOW=$(date +%s); EXP=$(date -d "$E" +%s 2>/dev/null || echo "$NOW"); [[ "$NOW" -gt "$EXP" ]] && BASE=$NOW || BASE=$EXP
-            NEW_E=$(date -d "@$((BASE + D * 86400))" +"%Y-%m-%d")
-            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $NEW_E $C ${ST:-unlocked}" >> "$DB_FILE"; echo -e "${GREEN}Renewed!${NC}"; sleep 1
-        elif [[ "$ACTION" == "modify" ]]; then
-            read -rp " New UUID/Pass: " C
-            sed -i "/^### ${U} /d" "$DB_FILE"; echo "### $U $E $C ${ST:-unlocked}" >> "$DB_FILE"; inject_user "$U" "$C"; systemctl restart xray; echo -e "${GREEN}Modified!${NC}"; sleep 1
-        else
-            print_6_links "$U" "$C" "$E" "${ST:-Active}"; read -n1 -srp "Enter..."
-        fi
-        ;;
-    list|cek-login)
-        printf "  %-4s %-14s %-12s %-10s\n" "NO" "USERNAME" "STATUS/ONLINE" "LIMIT IP"
-        i=1
-        while read -r line; do
-            U=$(echo "$line" | awk '{print $2}'); ST=$(echo "$line" | awk '{print $5}')
-            LIM=$(cat "/etc/xray/limit/ip/${PROTO}_${U}" 2>/dev/null || echo "2"); [[ "$LIM" == "0" ]] && L="Unli" || L="${LIM} IP"
-            if [[ "$ACTION" == "cek-login" ]]; then
-                CNT=$(tail -n 500 /var/log/xray/access.log 2>/dev/null | grep -w "email: $U" | awk '{print $3}' | cut -d: -f1 | sort -u | wc -l)
-                [[ "$CNT" -gt 0 ]] && printf "  %-4s %-14s %-12s %-10s\n" "${i})" "$U" "${CNT} IP" "$L"
-            else
-                printf "  %-4s %-14s %-12s %-10s\n" "${i})" "$U" "${ST:-unlocked}" "$L"
-            fi
-            i=$((i+1))
-        done < <(grep -E "^### " "$DB_FILE")
-        read -n1 -srp "Enter..."
-        ;;
-    lock|unlock)
-        [[ "$ACTION" == "lock" ]] && TARGET="unlocked" || TARGET="locked"
-        grep -E "^### .* $TARGET$" "$DB_FILE" | awk '{print $2}' | nl -s ') '
-        read -rp " Input Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### .* $TARGET$" "$DB_FILE" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
-        DATA=$(grep -E "^### ${U} " "$DB_FILE"); [[ -z "$DATA" ]] && exit 1
-        E=$(echo "$DATA" | awk '{print $3}'); C=$(echo "$DATA" | awk '{print $4}')
-        sed -i "/^### ${U} /d" "$DB_FILE"
-        if [[ "$ACTION" == "lock" ]]; then
-            echo "### $U $E $C locked" >> "$DB_FILE"; remove_user "$U"; echo -e "${RED}Locked!${NC}"
-        else
-            echo "### $U $E $C unlocked" >> "$DB_FILE"; inject_user "$U" "$C"; echo -e "${GREEN}Unlocked!${NC}"
-        fi
-        systemctl restart xray; sleep 1
-        ;;
-    limit-ip|limit-bw)
-        read -rp " Username: " U
-        read -rp " Nilai Baru (0=Unli): " V
-        [[ "$ACTION" == "limit-ip" ]] && echo "$V" > "/etc/xray/limit/ip/${PROTO}_${U}" || echo "$V" > "/etc/xray/limit/bw/${PROTO}_${U}"
-        echo -e "${GREEN}Saved!${NC}"; sleep 1
-        ;;
-    recovery)
-        while read -r line; do
-            U=$(echo "$line" | awk '{print $2}'); C=$(echo "$line" | awk '{print $4}'); S=$(echo "$line" | awk '{print $5}')
-            [[ "$S" != "locked" ]] && inject_user "$U" "$C"
-        done < <(grep -E "^### " "$DB_FILE")
-        ;;
-esac
-XMGR_EOF
-chmod +x /usr/bin/xray-manager
 
 echo -e "${YELLOW}[5/8] Menyiapkan Dropbear & Python WS-SSH...${NC}"
 [[ ! -f /etc/dropbear/dropbear_rsa_host_key ]] && dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key >/dev/null 2>&1
-cat << 'DB_SVC' > /etc/systemd/system/dropbear.service
+cat << 'DB_SVC' > /etc/systemd/system/cassanova-dropbear.service
 [Unit]
-Description=Dropbear SSH
+Description=Cassanova Dropbear SSH
+After=network.target
 [Service]
-ExecStart=/usr/sbin/dropbear -F -E -p 143 -p 109 -b /etc/issue.net
+Type=simple
+ExecStart=/usr/sbin/dropbear -F -E -p 143 -p 109
 Restart=on-failure
+RestartSec=3
 [Install]
 WantedBy=multi-user.target
 DB_SVC
 grep -qxF "/bin/false" /etc/shells || echo "/bin/false" >> /etc/shells
 
-cat << 'PY_WS' > /usr/local/bin/ws-ssh.py
-import socket, threading, select
-RESPONSE = b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
-class Handler(threading.Thread):
-    def __init__(self, c): super().__init__(daemon=True); self.c = c
-    def run(self):
-        try:
-            self.c.recv(4096); self.c.sendall(RESPONSE); t = socket.create_connection(('127.0.0.1', 22), timeout=10)
-            while True:
-                r, _, e = select.select([self.c, t], [], [self.c, t], 60)
-                if e or not r: break
-                for s in r:
-                    d = s.recv(4096)
-                    if not d: return
-                    (t if s is self.c else self.c).sendall(d)
-        except: pass
-        finally:
-            try: self.c.close()
-            except: pass
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(('127.0.0.1', 10015)); server.listen(128)
-while True: c, _ = server.accept(); Handler(c).start()
-PY_WS
-chmod +x /usr/local/bin/ws-ssh.py
-cat << 'WS_SVC' > /etc/systemd/system/ws-ssh.service
-[Unit]
-Description=SSH WebSocket Proxy
-[Service]
-ExecStart=/usr/bin/python3 /usr/local/bin/ws-ssh.py
-Restart=always
-[Install]
-WantedBy=multi-user.target
-WS_SVC
+# SSH-over-WebSocket custom proxy sengaja tidak dipasang: implementasi lama
+# tidak melakukan WebSocket handshake/frame handling dengan benar.
+# SSH biasa tetap tersedia melalui OpenSSH dan Dropbear.
 
-echo -e "${YELLOW}[6/8] Memasang Auto-Kill & Auto-Exp Daemon...${NC}"
-cat << 'AKILL' > /usr/bin/autokill-xray
-#!/bin/bash
-for P in vless vmess trojan; do
-    DB="/etc/xray/${P}.db"; [[ ! -s "$DB" ]] && continue
-    while read -r line; do
-        U=$(echo "$line" | awk '{print $2}'); C=$(echo "$line" | awk '{print $4}'); S=$(echo "$line" | awk '{print $5}')
-        [[ "$S" == "locked" ]] && continue
-        LIM=$(cat "/etc/xray/limit/ip/${P}_${U}" 2>/dev/null || echo "2")
-        [[ "$LIM" -le 0 ]] && continue
-        IP_CNT=$(tail -n 500 /var/log/xray/access.log 2>/dev/null | grep -w "email: $U" | awk '{print $3}' | awk -F: '{print $1}' | sort -u | wc -l)
-        if [[ "$IP_CNT" -gt "$LIM" ]]; then
-            sed -i "/^### ${U} /d" "$DB"; echo "### $U $(echo "$line"|awk '{print $3}') $C locked" >> "$DB"
-            /usr/bin/xray-manager "$P" recovery silent
-        fi
-    done < <(grep -E "^### " "$DB")
-done
-AKILL
-cat << 'AEXP' > /usr/bin/auto-exp
-#!/bin/bash
-NOW=$(date +%s)
-for P in vless vmess trojan; do
-    DB="/etc/xray/${P}.db"; [[ ! -s "$DB" ]] && continue
-    while read -r line; do
-        U=$(echo "$line" | awk '{print $2}'); E=$(date -d "$(echo "$line"|awk '{print $3}')" +%s 2>/dev/null)
-        if [[ "$NOW" -gt "$E" ]]; then
-            sed -i "/^### ${U} /d" "$DB"; /usr/bin/xray-manager "$P" recovery silent
-        fi
-    done < <(grep -E "^### " "$DB")
-done
-AEXP
-chmod +x /usr/bin/autokill-xray /usr/bin/auto-exp
-(crontab -l 2>/dev/null | grep -v "autokill" | grep -v "auto-exp"; echo "0 0 * * * /usr/bin/auto-exp"; echo "*/2 * * * * /usr/bin/autokill-xray") | crontab -
+echo -e "${YELLOW}[6/8] Menyiapkan housekeeping aman...${NC}"
+# Auto-kill/IP-limit Xray versi lama dinonaktifkan karena format database
+# dan enforcement-nya tidak aman. Crontab administrator tidak disentuh.
 
 echo -e "${YELLOW}[7/8] Mengunduh UI Menu & Bot Telegram dari GitHub Anda...${NC}"
 REPO="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main"
-wget -qO /usr/bin/menu "${REPO}/menu.sh"
-wget -qO /usr/bin/m-vless "${REPO}/modules/m-vless.sh"
-wget -qO /usr/bin/m-vmess "${REPO}/modules/m-vmess.sh"
-wget -qO /usr/bin/m-trojan "${REPO}/modules/m-trojan.sh"
-wget -qO /usr/bin/m-ssh "${REPO}/modules/m-ssh.sh"
-wget -qO /usr/bin/m-feature "${REPO}/modules/m-feature.sh"
-wget -qO /usr/bin/m-bot "${REPO}/modules/m-bot.sh"
-wget -qO /usr/local/bin/bot-tele.py "${REPO}/bot-tele.py"
-wget -qO /usr/bin/update-sc "${REPO}/update.sh"
-chmod +x /usr/bin/menu /usr/bin/m-* /usr/bin/update-sc /usr/local/bin/bot-tele.py
+STAGE=$(mktemp -d)
+cleanup_stage() { rm -rf "$STAGE"; }
+trap cleanup_stage EXIT
+FILES=(
+    "VERSION:/usr/local/share/cassanova/VERSION"
+    "menu.sh:/usr/bin/menu"
+    "modules/m-vless.sh:/usr/bin/m-vless"
+    "modules/m-vmess.sh:/usr/bin/m-vmess"
+    "modules/m-trojan.sh:/usr/bin/m-trojan"
+    "modules/xray-manager.sh:/usr/bin/xray-manager"
+    "modules/cassanova-notify.py:/usr/local/bin/cassanova-notify.py"
+    "modules/cassanova-bandwidth.py:/usr/bin/cassanova-bandwidth"
+    "modules/cassanova-expire.sh:/usr/bin/cassanova-expire"
+    "modules/cassanova-ssh-expire.sh:/usr/bin/cassanova-ssh-expire"
+    "modules/hy2-manager.sh:/usr/bin/hy2-manager"
+    "modules/m-hysteria2.sh:/usr/bin/m-hysteria2"
+    "install-hysteria2.sh:/usr/bin/install-hysteria2"
+    "modules/m-ssh.sh:/usr/bin/m-ssh"
+    "modules/m-feature.sh:/usr/bin/m-feature"
+    "modules/m-bot.sh:/usr/bin/m-bot"
+    "modules/cassanova-backup.sh:/usr/bin/cassanova-backup"
+    "modules/cassanova-restore.sh:/usr/bin/cassanova-restore"
+    "modules/cassanova-service.sh:/usr/bin/cassanova-service"
+    "bot-tele.py:/usr/local/bin/bot-tele.py"
+    "update.sh:/usr/bin/update-sc"
+)
+install -d -m 0755 /usr/local/share/cassanova
+for ITEM in "${FILES[@]}"; do
+    SRC="${ITEM%%:*}"
+    DEST="${ITEM#*:}"
+    if ! curl -fsSL --retry 3 --connect-timeout 15 "${REPO}/${SRC}" -o "${STAGE}/$(basename "$DEST")"; then
+        echo -e "${RED}[ERROR] Gagal mengunduh ${SRC}; file sistem tidak akan diperbarui.${NC}"
+        exit 1
+    fi
+    if [[ ! -s "${STAGE}/$(basename "$DEST")" ]]; then
+        echo -e "${RED}[ERROR] File ${SRC} kosong; membatalkan instalasi.${NC}"
+        exit 1
+    fi
+    if [[ "$SRC" == *.sh ]] && ! bash -n "${STAGE}/$(basename "$DEST")"; then
+        echo -e "${RED}[ERROR] Sintaks shell tidak valid: ${SRC}${NC}"
+        exit 1
+    fi
+    if [[ "$SRC" == *.py ]] && ! python3 -m py_compile "${STAGE}/$(basename "$DEST")"; then
+        echo -e "${RED}[ERROR] Sintaks Python tidak valid: ${SRC}${NC}"
+        exit 1
+    fi
+done
+for ITEM in "${FILES[@]}"; do
+    DEST="${ITEM#*:}"
+    install -D -m 0755 "${STAGE}/$(basename "$DEST")" "$DEST"
+done
+chmod 0644 /usr/local/bin/bot-tele.py /usr/local/bin/cassanova-notify.py /usr/local/share/cassanova/VERSION
+
+cat << 'EXP_SVC' > /etc/systemd/system/cassanova-expire.service
+[Unit]
+Description=Cassanova Xray Account Expiry Reconciliation
+After=network.target xray.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/cassanova-expire
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EXP_SVC
+
+cat << 'EXP_TIMER' > /etc/systemd/system/cassanova-expire.timer
+[Unit]
+Description=Daily Cassanova Xray Account Expiry Check
+
+[Timer]
+OnCalendar=*-*-* 00:15:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=cassanova-expire.service
+
+[Install]
+WantedBy=timers.target
+EXP_TIMER
+
+cat << 'BW_SVC' > /etc/systemd/system/cassanova-bandwidth.service
+[Unit]
+Description=Cassanova Xray Per-User Bandwidth Enforcement
+After=network.target xray.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/cassanova-bandwidth
+UMask=0077
+
+BW_SVC
+
+cat << 'BW_TIMER' > /etc/systemd/system/cassanova-bandwidth.timer
+[Unit]
+Description=Run Cassanova Xray bandwidth enforcement every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=cassanova-bandwidth.service
+
+[Install]
+WantedBy=timers.target
+BW_TIMER
 
 cat << 'BOT_SVC' > /etc/systemd/system/bot-tele.service
 [Unit]
@@ -369,25 +399,66 @@ Type=simple
 User=root
 ExecStart=/usr/bin/python3 /usr/local/bin/bot-tele.py
 Restart=always
-RestartSec=3
+RestartSec=5
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
 BOT_SVC
 
-cat << 'BRC_EOF' > /root/.bashrc
-case $- in *i*) ;; *) return;; esac
-HISTCONTROL=ignoredups:ignorespace; shopt -s histappend; HISTSIZE=1000; HISTFILESIZE=2000; shopt -s checkwinsize
-if [ -f ~/.bash_aliases ]; then . ~/.bash_aliases; fi
-PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-if [[ -f /usr/bin/menu ]]; then /usr/bin/menu; fi
-BRC_EOF
+BASHRC_MARKER="# >>> CASSANOVA TUNNELING V2 >>>"
+if ! grep -Fq "$BASHRC_MARKER" /root/.bashrc 2>/dev/null; then
+    cat << 'BRC_EOF' >> /root/.bashrc
 
-echo -e "${YELLOW}[8/8] Memulai semua layanan...${NC}"
+# >>> CASSANOVA TUNNELING V2 >>>
+case $- in *i*) ;; *) return;; esac
+if [[ -x /usr/bin/menu && -z "${CASSANOVA_MENU_DISABLED:-}" ]]; then /usr/bin/menu; fi
+# <<< CASSANOVA TUNNELING V2 <<<
+BRC_EOF
+fi
+
+echo -e "${YELLOW}[8/8] Validasi konfigurasi dan memulai layanan...${NC}"
+if ! xray run -test -config /usr/local/etc/xray/config.json; then
+    echo -e "${RED}[ERROR] Konfigurasi Xray tidak valid. Layanan tidak akan direstart.${NC}"
+    echo "Snapshot pra-instalasi: $BACKUP_DIR"
+    exit 1
+fi
+if ! nginx -t; then
+    echo -e "${RED}[ERROR] Konfigurasi Nginx tidak valid. Layanan tidak akan direstart.${NC}"
+    echo "Snapshot pra-instalasi: $BACKUP_DIR"
+    exit 1
+fi
+if ! sing-box check -c /etc/sing-box/config.json; then
+    echo -e "${RED}[ERROR] Konfigurasi sing-box tidak valid. Layanan tidak akan direstart.${NC}"
+    echo "Snapshot pra-instalasi: $BACKUP_DIR"
+    exit 1
+fi
 systemctl daemon-reload
-systemctl enable xray nginx ws-ssh dropbear fail2ban vnstat bot-tele >/dev/null 2>&1
-systemctl restart xray nginx ws-ssh dropbear fail2ban vnstat bot-tele
+for svc in xray nginx cassanova-dropbear fail2ban vnstat sing-box; do
+    if ! systemctl enable "$svc" >/dev/null 2>&1; then
+        echo "[ERROR] Gagal mengaktifkan service $svc. Snapshot: $BACKUP_DIR"
+        exit 1
+    fi
+    if ! systemctl restart "$svc" || ! systemctl is-active --quiet "$svc"; then
+        echo "[ERROR] Service $svc gagal berjalan. Detail: systemctl status $svc"
+        systemctl status "$svc" --no-pager || true
+        echo "Snapshot pra-instalasi: $BACKUP_DIR"
+        exit 1
+    fi
+done
+systemctl enable --now cassanova-expire.timer >/dev/null 2>&1 || echo "[WARN] Timer expiry belum dapat diaktifkan. Periksa systemctl status cassanova-expire.timer."
+systemctl daemon-reload
+if jq -e '((.api.services // []) | index("StatsService") != null) and any(.inbounds[]?; .tag == "api-in" and .port == 10085) and any(.routing.rules[]?; ((.inboundTag // []) | index("api-in") != null) and .outboundTag == "api")' /usr/local/etc/xray/config.json >/dev/null 2>&1; then systemctl enable --now cassanova-bandwidth.timer >/dev/null 2>&1 || echo "[WARN] Timer bandwidth belum dapat diaktifkan. Periksa systemctl status cassanova-bandwidth.timer."; fi
+# Bot opsional sampai token dan admin dikonfigurasi.
+if [[ -s /etc/bot/token && -s /etc/bot/admin ]]; then
+    systemctl enable bot-tele >/dev/null 2>&1 || true
+    if ! systemctl restart bot-tele; then
+        echo "[WARN] Telegram Bot gagal start; engine protokol utama tetap berjalan."
+    fi
+fi
 
 echo -e "${GREEN}====================================================${NC}"
-echo -e "${GREEN}[OK] Instalasi Cassanova Tunneling Selesai!${NC}"
+echo -e "${GREEN}[OK] Instalasi Cassanova Tunneling selesai.${NC}"
+echo -e "${YELLOW}Snapshot pra-instalasi: ${BACKUP_DIR}${NC}"
+echo -e "${YELLOW}SSH-over-WebSocket dan Xray auto-kill dinonaktifkan sampai implementasinya tervalidasi.${NC}"
 echo -e "${GREEN}====================================================${NC}"

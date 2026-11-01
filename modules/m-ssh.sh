@@ -1,275 +1,221 @@
-cat << 'PATCH_EOF' > /root/update-semua-menu.sh
-#!/bin/bash
-NC='\e[0m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'
+#!/usr/bin/env bash
+# SC Cassanova Tunneling - SSH account manager
+set -Eeuo pipefail
+umask 077
 
-echo -e "${YELLOW}[1/4] Memperbarui Modul m-ssh (Fungsional Penuh)...${NC}"
-cat << 'SSH_EOF' > /usr/bin/m-ssh
-#!/bin/bash
-trap 'echo ""; /usr/bin/menu; exit 0' SIGINT
-printf "\033[2J\033[H\033[3J"
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'; MAGENTA='\e[1;35m'
-DB_SSH="/etc/ssh/.ssh.db"
-mkdir -p /etc/ssh; touch "$DB_SSH"
-sed -i -E 's/^(### [^ ]+ [^ ]+ [^ ]+)$/\1 unlocked/g' "$DB_SSH"
+DB_FILE="/etc/ssh/.ssh.db"
+NOTIFIER="/usr/local/bin/cassanova-notify.py"
+LOCK_FILE="/run/lock/sc-tunnel-ssh.lock"
+NC='\033[0m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; RED='\033[1;31m'; CYAN='\033[1;36m'; BLUE='\033[1;34m'
 
-print_ssh() {
-    local u="$1"; local p="$2"; local e="$3"
-    local dom=$(cat /etc/xray/domain.txt 2>/dev/null)
-    local ip=$(curl -sS --max-time 3 https://ipv4.icanhazip.com || echo "127.0.0.1")
-    clear
-    echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-    echo -e "            ${GREEN}DETAIL AKUN SSH & WEBSOCKET${NC}"
-    echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-    echo -e " Username       : ${CYAN}${u}${NC}"
-    echo -e " Password       : ${YELLOW}${p}${NC}"
-    echo -e " Domain         : ${GREEN}${dom}${NC}"
-    echo -e " IP Server      : ${GREEN}${ip}${NC}"
-    echo -e " OpenSSH        : 22"
-    echo -e " Dropbear       : 109, 143"
-    echo -e " SSH WS TLS     : 443"
-    echo -e " SSH WS Non-TLS : 80, 8080, 8880"
-    echo -e " Expired Date   : ${RED}${e}${NC}"
-    echo -e " ${BLUE}──────────────────────────────────────────────────${NC}"
-    echo -e " ${YELLOW}PAYLOAD WS:${NC}"
-    echo -e " ${CYAN}GET / HTTP/1.1[crlf]Host: ${dom}[crlf]Upgrade: websocket[crlf][crlf]${NC}"
-    echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
+fail() { printf "${RED}ERROR:${NC} %s\n" "$*" >&2; }
+ok() { printf "${GREEN}%s${NC}\n" "$*"; }
+info() { printf "${YELLOW}%s${NC}\n" "$*"; }
+
+if (( EUID != 0 )); then fail 'Jalankan menu SSH sebagai root.'; exit 1; fi
+for cmd in useradd userdel chage passwd chpasswd flock awk date getent jq python3; do
+  command -v "$cmd" >/dev/null 2>&1 || { fail "Perintah wajib tidak ditemukan: $cmd"; exit 1; }
+done
+install -d -m 0700 /etc/ssh
+[[ -e "$DB_FILE" ]] || install -m 0600 /dev/null "$DB_FILE"
+chmod 0600 "$DB_FILE"
+exec 9>"$LOCK_FILE"
+flock -x 9
+
+valid_user() { [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; }
+valid_days() { [[ "$1" =~ ^[1-9][0-9]{0,3}$ ]] && (( $1 <= 3650 )); }
+
+# Normalize old records (### user YYYY-MM-DD [legacy-password] [status])
+# Passwords from legacy files are deliberately discarded: never keep plaintext credentials.
+migrate_db() {
+  local tmp line user expiry status
+  tmp=$(mktemp)
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^###\  ]] || continue
+    read -r _ user expiry fourth fifth <<< "$line"
+    valid_user "$user" || continue
+    [[ "$expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || continue
+    # Legacy format had password in column 4 and optional status in column 5.
+    # New format stores status in column 4 and never stores a password.
+    status=unlocked
+    if [[ "$fourth" == locked || "$fifth" == locked ]]; then status=locked; fi
+    if [[ "$fourth" == expired || "$fifth" == expired ]]; then status=expired; fi
+    printf '### %s %s %s\n' "$user" "$expiry" "$status" >> "$tmp"
+  done < "$DB_FILE"
+  install -m 0600 "$tmp" "$DB_FILE"
+  rm -f "$tmp"
+}
+migrate_db
+
+find_record() { awk -v u="$1" '$1=="###" && $2==u {print $0; exit}' "$DB_FILE"; }
+record_set() {
+  local user="$1" expiry="$2" status="$3" tmp
+  tmp=$(mktemp)
+  awk -v u="$user" '$1=="###" && $2==u {next} {print}' "$DB_FILE" > "$tmp"
+  printf '### %s %s %s\n' "$user" "$expiry" "$status" >> "$tmp"
+  install -m 0600 "$tmp" "$DB_FILE"; rm -f "$tmp"
+}
+record_remove() {
+  local user="$1" tmp
+  tmp=$(mktemp)
+  awk -v u="$user" '!($1=="###" && $2==u)' "$DB_FILE" > "$tmp"
+  install -m 0600 "$tmp" "$DB_FILE"; rm -f "$tmp"
+}
+notify_event() {
+  local event="$1" user="${2:-}" expiry="${3:-}" credential="${4:-}" details="${5:-[]}"
+  local domain ip context
+  [[ -f "$NOTIFIER" ]] || { info 'Telegram notifier belum terpasang; notifikasi dilewati.'; return 0; }
+  domain=$(tr -d '[:space:]' < /etc/xray/domain.txt 2>/dev/null || true)
+  [[ -n "$domain" ]] || domain=$(hostname -f 2>/dev/null || hostname)
+  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  context="SSH port 22 | Domain: ${domain:-tidak diketahui} | IP: ${ip:-tidak diketahui} | Mode: OpenSSH"
+  jq -cn --arg event "$event" --arg protocol SSH --arg username "$user" \
+    --arg expiry "$expiry" --arg credential "$credential" --arg context "$context" \
+    --argjson details "$details" \
+    '{event:$event,protocol:$protocol,username:$username,expiry:$expiry,credential:$credential,context:$context,details:$details}' \
+    | python3 "$NOTIFIER" || info 'Gagal mengirim notifikasi Telegram; operasi akun tetap berhasil.'
+}
+choose_user() {
+  local input
+  read -rp 'Username atau nomor: ' input
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    awk '$1=="###" {n++; if(n==ARGV[1]) print $2}' "$input" "$DB_FILE" 2>/dev/null
+  else printf '%s' "$input"; fi
+}
+list_users() {
+  printf '\n%-4s %-18s %-14s %-12s %-10s\n' 'NO' 'USERNAME' 'EXPIRED' 'ACCOUNT' 'STATUS'
+  local n=0 user expiry status account
+  while read -r _ user expiry status; do
+    [[ -n "${user:-}" ]] || continue
+    n=$((n+1)); account='MISSING'
+    if getent passwd "$user" >/dev/null; then
+      account=$(passwd -S "$user" 2>/dev/null | awk '{print $2}')
+      [[ "$account" == L || "$account" == LK ]] && account='LOCKED'
+      [[ "$account" == P ]] && account='ACTIVE'
+    fi
+    printf '%-4s %-18s %-14s %-12s %-10s\n' "$n" "$user" "$expiry" "$account" "$status"
+  done < <(grep '^### ' "$DB_FILE" || true)
+  printf '\n'
+}
+show_details() {
+  local user="$1" expiry="$2" ip domain
+  ip=$(curl -4fsS --connect-timeout 2 --max-time 4 https://api.ipify.org 2>/dev/null || printf 'Tidak diketahui')
+  domain=$(cat /etc/xray/domain.txt 2>/dev/null || printf 'Belum diatur')
+  printf '\n${CYAN}Akun SSH dibuat${NC}\nUsername : %s\nPassword : (gunakan password yang baru Anda masukkan)\nIP       : %s\nDomain   : %s\nPort SSH : 22\nExpired  : %s\n\n' "$user" "$ip" "$domain" "$expiry"
 }
 
-clear
-echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-echo -e "             ${MAGENTA}SSH-Dropbear-WebSocket${NC}"
-echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-echo -e "  ${GREEN}1.)${NC}  Create              ${GREEN}6.)${NC}  Check Users Login"
-echo -e "  ${GREEN}2.)${NC}  Trial               ${GREEN}7.)${NC}  List Users"
-echo -e "  ${GREEN}3.)${NC}  Delete              ${GREEN}8.)${NC}  Lock User"
-echo -e "  ${GREEN}4.)${NC}  Renew               ${GREEN}9.)${NC}  Unlock User"
-echo -e "  ${GREEN}5.)${NC}  Modify Password     ${GREEN}10.)${NC} Check Config"
-echo -e " ${BLUE}──────────────────────────────────────────────────${NC}"
-echo -e "  ${GREEN}11.)${NC} Recovery            ${RED}x.)${NC}  Back to Menu"
-echo ""
-read -rp " Pilih [1-11 atau x] : " OPT_SSH
-trap 'echo ""; /usr/bin/m-ssh; exit 0' SIGINT
-case $OPT_SSH in
-    1)
-        read -rp " Username : " U; U=$(echo "$U"|tr -d '[:space:]'); [[ -z "$U" ]] && exit 0
-        grep -E -q "^### ${U} " "$DB_SSH" && { echo -e "${RED}User ada!${NC}"; sleep 2; m-ssh; exit 0; }
-        read -rp " Password : " P; [[ -z "$P" ]] && P="123"
-        read -rp " Hari     : " D; [[ ! "$D" =~ ^[0-9]+$ ]] && D=30
-        E=$(date -d "+${D} days" +"%Y-%m-%d")
-        useradd -e "$E" -s /bin/false -M "$U" 2>/dev/null
-        echo "$U:$P" | chpasswd
-        echo "### $U $E $P unlocked" >> "$DB_SSH"
-        print_ssh "$U" "$P" "$E"; read -n 1 -srp "Enter..." ;;
-    2)
-        U="trial-$(head /dev/urandom | tr -dc 0-9 | head -c 3)"; P="1"; E=$(date -d "+1 days" +"%Y-%m-%d")
-        useradd -e "$E" -s /bin/false -M "$U" 2>/dev/null; echo "$U:$P" | chpasswd
-        echo "### $U $E $P unlocked" >> "$DB_SSH"
-        print_ssh "$U" "$P" "$E"; read -n 1 -srp "Enter..." ;;
+while true; do
+  clear 2>/dev/null || true
+  printf "${BLUE}════════════ SC CASSANOVA | SSH MANAGER ════════════${NC}\n"
+  printf ' 1. Buat akun SSH          6. Ubah password\n'
+  printf ' 2. Buat akun trial 1 hari 7. Kunci akun\n'
+  printf ' 3. Hapus akun             8. Buka kunci akun\n'
+  printf ' 4. Perpanjang akun        9. Daftar akun\n'
+  printf ' 5. Cek akun               10. Login aktif\n'
+  printf '11. Recovery / sinkronisasi akun\n'
+  printf ' 0. Kembali\n'
+  read -rp 'Pilih menu: ' choice
+  case "$choice" in
+    1|2)
+      if [[ "$choice" == 2 ]]; then
+        user="trial$(date +%s | tail -c 6)"; days=1
+        while getent passwd "$user" >/dev/null; do user="trial${RANDOM}"; done
+        password=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
+      else
+        read -rp 'Username: ' user
+        valid_user "$user" || { fail 'Username tidak valid (huruf kecil, angka, _ atau -; maksimal 32 karakter).'; read -rp 'Enter untuk lanjut...'; continue; }
+        read -rsp 'Password (minimal 8 karakter): ' password; printf '\n'
+        [[ ${#password} -ge 8 && "$password" != *:* && "$password" != *$'\n'* ]] || { fail 'Password minimal 8 karakter dan tidak boleh mengandung titik dua.'; read -rp 'Enter untuk lanjut...'; continue; }
+        read -rp 'Masa aktif (hari, 1-3650): ' days
+        valid_days "$days" || { fail 'Jumlah hari tidak valid.'; read -rp 'Enter untuk lanjut...'; continue; }
+      fi
+      if getent passwd "$user" >/dev/null || [[ -n "$(find_record "$user")" ]]; then fail 'Username sudah digunakan.'; read -rp 'Enter...'; continue; fi
+      expiry=$(date -d "+${days} days" +%F)
+      if ! useradd -M -s /usr/sbin/nologin -e "$expiry" "$user"; then fail 'Gagal membuat akun sistem.'; read -rp 'Enter...'; continue; fi
+      if ! printf '%s:%s\n' "$user" "$password" | chpasswd; then userdel "$user"; fail 'Gagal menetapkan password.'; read -rp 'Enter...'; continue; fi
+      record_set "$user" "$expiry" unlocked
+      printf '\n'; ok 'Akun berhasil dibuat.'; printf 'Username: %s\nPassword: %s\nExpired : %s\n' "$user" "$password" "$expiry"
+      notify_event create "$user" "$expiry" "$password"
+      ;;
     3)
-        grep -E "^### " "$DB_SSH" | awk '{print $2, $3}' | nl -s ') '
-        read -rp " Hapus Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### " "$DB_SSH" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
-        if grep -E -q "^### ${U} " "$DB_SSH"; then
-            userdel -f "$U" 2>/dev/null; sed -i "/^### ${U} /d" "$DB_SSH"; echo -e "${GREEN}Dihapus!${NC}"
-        fi; sleep 1 ;;
+      list_users; read -rp 'Username yang akan dihapus: ' user
+      if ! valid_user "$user" || [[ -z "$(find_record "$user")" ]]; then fail 'Akun tidak ditemukan di database SC.'
+      else
+        expiry=$(awk '{print $3}' <<< "$(find_record "$user")")
+        if userdel "$user" 2>/dev/null; then record_remove "$user"; ok 'Akun dihapus.'; notify_event delete "$user" "$expiry"; else fail 'Gagal menghapus akun Linux; metadata tidak diubah.'; fi
+      fi
+      ;;
     4)
-        grep -E "^### " "$DB_SSH" | awk '{print $2, $3}' | nl -s ') '
-        read -rp " Renew Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### " "$DB_SSH" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
-        DATA=$(grep -E "^### ${U} " "$DB_SSH"); [[ -z "$DATA" ]] && exit 0
-        read -rp " Tambah Hari: " D; [[ ! "$D" =~ ^[0-9]+$ ]] && D=30
-        E=$(echo "$DATA" | awk '{print $3}'); P=$(echo "$DATA" | awk '{print $4}')
-        NOW=$(date +%s); EXP=$(date -d "$E" +%s 2>/dev/null || echo "$NOW"); [[ "$NOW" -gt "$EXP" ]] && BASE=$NOW || BASE=$EXP
-        NEW_E=$(date -d "@$((BASE + D * 86400))" +"%Y-%m-%d")
-        chage -E "$NEW_E" "$U" 2>/dev/null; sed -i "/^### ${U} /d" "$DB_SSH"; echo "### $U $NEW_E $P unlocked" >> "$DB_SSH"
-        echo -e "${GREEN}Renewed!${NC}"; sleep 1 ;;
+      list_users; read -rp 'Username: ' user; rec=$(find_record "$user")
+      if [[ -z "$rec" ]] || ! getent passwd "$user" >/dev/null; then fail 'Akun tidak ditemukan.'; else
+        read -rp 'Tambahan hari (1-3650): ' days
+        if valid_days "$days"; then
+          old_exp=$(awk '{print $3}' <<< "$rec"); now=$(date +%s); old_ts=$(date -d "$old_exp" +%s 2>/dev/null || echo 0)
+          (( old_ts < now )) && base=$now || base=$old_ts
+          expiry=$(date -d "@$((base + days*86400))" +%F)
+          old_status=$(awk '{print $4}' <<< "$rec")
+          if chage -E "$expiry" "$user"; then
+            if [[ "$old_status" == expired ]]; then passwd -u "$user" >/dev/null 2>&1 || true; old_status=unlocked; fi
+            record_set "$user" "$expiry" "$old_status"; ok "Masa aktif diperbarui sampai $expiry."; notify_event renew "$user" "$expiry"
+          else fail 'Gagal memperbarui expiry Linux.'; fi
+        else fail 'Jumlah hari tidak valid.'; fi
+      fi
+      ;;
     5)
-        grep -E "^### " "$DB_SSH" | awk '{print $2}' | nl -s ') '
-        read -rp " Edit Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### " "$DB_SSH" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
-        DATA=$(grep -E "^### ${U} " "$DB_SSH"); [[ -z "$DATA" ]] && exit 0
-        read -rp " Password Baru: " P; echo "$U:$P" | chpasswd
-        E=$(echo "$DATA" | awk '{print $3}'); sed -i "/^### ${U} /d" "$DB_SSH"; echo "### $U $E $P unlocked" >> "$DB_SSH"
-        echo -e "${GREEN}Modified!${NC}"; sleep 1 ;;
+      list_users; read -rp 'Username untuk diperiksa: ' user; rec=$(find_record "$user")
+      if [[ -z "$rec" ]]; then fail 'Tidak tercatat di database SC.'; else
+        expiry=$(awk '{print $3}' <<< "$rec"); chage -l "$user" 2>/dev/null || true
+        printf 'Status metadata: %s\n' "$(awk '{print $4}' <<< "$rec")"
+        printf 'Status akun: '; passwd -S "$user" 2>/dev/null || true
+        printf 'Tanggal kedaluwarsa metadata: %s\n' "$expiry"
+      fi
+      ;;
     6)
-        ps aux | grep -E "sshd: |dropbear" | grep -v root | grep -v grep || echo -e "${YELLOW}Tidak ada user login.${NC}"
-        read -n 1 -srp "Enter..." ;;
-    7)
-        printf "  %-4s %-15s %-12s %-12s %-10s\n" "NO" "USERNAME" "PASSWORD" "EXPIRED" "STATUS"
-        i=1; while read -r line; do
-            U=$(echo "$line" | awk '{print $2}'); E=$(echo "$line" | awk '{print $3}'); P=$(echo "$line" | awk '{print $4}'); S=$(echo "$line" | awk '{print $5}')
-            printf "  %-4s %-15s %-12s %-12s %-10s\n" "${i})" "$U" "$P" "$E" "${S:-unlocked}"
-            i=$((i+1))
-        done < <(grep -E "^### " "$DB_SSH")
-        read -n 1 -srp "Enter..." ;;
-    8|9)
-        [[ "$OPT_SSH" == "8" ]] && T="unlocked" || T="locked"
-        grep -E "^### .* $T$" "$DB_SSH" | awk '{print $2}' | nl -s ') '
-        read -rp " Input Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### .* $T$" "$DB_SSH" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
-        DATA=$(grep -E "^### ${U} " "$DB_SSH"); [[ -z "$DATA" ]] && exit 0
-        E=$(echo "$DATA" | awk '{print $3}'); P=$(echo "$DATA" | awk '{print $4}'); sed -i "/^### ${U} /d" "$DB_SSH"
-        if [[ "$OPT_SSH" == "8" ]]; then passwd -l "$U" >/dev/null 2>&1; echo "### $U $E $P locked" >> "$DB_SSH"; echo -e "${RED}Locked!${NC}"
-        else passwd -u "$U" >/dev/null 2>&1; echo "### $U $E $P unlocked" >> "$DB_SSH"; echo -e "${GREEN}Unlocked!${NC}"; fi
-        sleep 1 ;;
+      read -rp 'Username: ' user
+      if [[ -z "$(find_record "$user")" ]]; then fail 'Akun tidak ditemukan.'; else
+        read -rsp 'Password baru (minimal 8 karakter): ' password; printf '\n'
+        if [[ ${#password} -ge 8 && "$password" != *:* ]]; then if printf '%s:%s\n' "$user" "$password" | chpasswd; then ok 'Password berhasil diubah.'; rec=$(find_record "$user"); notify_event modify "$user" "$(awk '{print $3}' <<< "$rec")" "$password"; else fail 'Gagal mengubah password.'; fi; else fail 'Password tidak valid.'; fi
+      fi
+      ;;
+    7|8)
+      read -rp 'Username: ' user; rec=$(find_record "$user")
+      if [[ -z "$rec" ]] || ! getent passwd "$user" >/dev/null; then fail 'Akun tidak ditemukan.'; else
+        expiry=$(awk '{print $3}' <<< "$rec")
+        if [[ "$choice" == 7 ]]; then if passwd -l "$user" >/dev/null; then record_set "$user" "$expiry" locked; ok 'Akun dikunci.'; notify_event lock "$user" "$expiry"; else fail 'Gagal mengunci akun.'; fi
+        else if passwd -u "$user" >/dev/null; then record_set "$user" "$expiry" unlocked; ok 'Akun dibuka.'; notify_event unlock "$user" "$expiry"; else fail 'Gagal membuka kunci akun.'; fi; fi
+      fi
+      ;;
+    9) list_users ;;
     10)
-        grep -E "^### " "$DB_SSH" | awk '{print $2}' | nl -s ') '
-        read -rp " Check Username/No: " IN_U
-        [[ "$IN_U" =~ ^[0-9]+$ ]] && U=$(grep -E "^### " "$DB_SSH" | sed -n "${IN_U}p" | awk '{print $2}') || U="$IN_U"
-        DATA=$(grep -E "^### ${U} " "$DB_SSH"); [[ -n "$DATA" ]] && print_ssh "$U" "$(echo "$DATA" | awk '{print $4}')" "$(echo "$DATA" | awk '{print $3}')"
-        read -n 1 -srp "Enter..." ;;
-    11) systemctl restart ssh sshd dropbear ws-ssh 2>/dev/null; echo -e "${GREEN}Recovery Selesai!${NC}"; sleep 1 ;;
-    x|X) menu ;; *) m-ssh ;;
-esac
-m-ssh
-SSH_EOF
-chmod +x /usr/bin/m-ssh
-
-echo -e "${YELLOW}[2/4] Memperbarui Modul m-feature (Fungsional Penuh)...${NC}"
-cat << 'FEAT_EOF' > /usr/bin/m-feature
-#!/bin/bash
-trap 'echo ""; /usr/bin/menu; exit 0' SIGINT
-printf "\033[2J\033[H\033[3J"
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'; MAGENTA='\e[1;35m'
-clear
-echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-echo -e "                    ${MAGENTA}FEATURES${NC}"
-echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-echo -e "  ${GREEN}1.)${NC}  Check Bandwidth        ${GREEN}12.)${NC} Outbounds Routing"
-echo -e "  ${GREEN}2.)${NC}  Set Auto Reboot        ${GREEN}13.)${NC} Rules Routing"
-echo -e "  ${GREEN}3.)${NC}  Reboot VPS             ${GREEN}14.)${NC} Check Config Routing"
-echo -e "  ${GREEN}4.)${NC}  Speed VPS              ${GREEN}15.)${NC} Restart All Service"
-echo -e "  ${GREEN}5.)${NC}  Restart Dropbear       ${GREEN}16.)${NC} Security BBR & SYN"
-echo -e "  ${GREEN}6.)${NC}  Check All Service      ${GREEN}17.)${NC} Change Domain VPS"
-echo -e "  ${GREEN}7.)${NC}  Setup BOT Telegram     ${GREEN}18.)${NC} Change Brand Name"
-echo -e "  ${GREEN}8.)${NC}  Backup Config VPS      ${GREEN}19.)${NC} Clean Expired Now"
-echo -e "  ${GREEN}9.)${NC}  Restore Config VPS     ${GREEN}20.)${NC} Set Auto-Clean Cron"
-echo -e "  ${GREEN}10.)${NC} Manages Domain & SNI   ${GREEN}21.)${NC} Information System"
-echo -e "  ${GREEN}11.)${NC} WARP Cloudflare        ${RED}x.)${NC}  Back to Menu"
-echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-read -rp " Pilih [1-21 atau x] : " OPT_F
-trap 'echo ""; /usr/bin/m-feature; exit 0' SIGINT
-case $OPT_F in
-    1) clear; vnstat; read -n1 -srp "Enter..." ;;
-    2) 
-       clear; echo -e "  1.) Jam 00:00\n  2.) Jam 03:00\n  3.) 12 Jam Sekali\n  4.) Matikan"
-       read -rp " Pilih: " T
-       if [[ "$T" == "1" ]]; then (crontab -l 2>/dev/null | grep -v "/sbin/reboot"; echo "0 0 * * * /sbin/reboot") | crontab -; echo -e "${GREEN}Aktif Jam 00:00${NC}"
-       elif [[ "$T" == "2" ]]; then (crontab -l 2>/dev/null | grep -v "/sbin/reboot"; echo "0 3 * * * /sbin/reboot") | crontab -; echo -e "${GREEN}Aktif Jam 03:00${NC}"
-       elif [[ "$T" == "4" ]]; then (crontab -l 2>/dev/null | grep -v "/sbin/reboot") | crontab -; echo -e "${RED}Dimatikan${NC}"; fi
-       sleep 1 ;;
-    3) read -rp " Reboot sekarang? [y/n]: " Y; [[ "$Y" == "y" ]] && reboot ;;
-    4) clear; curl -sL https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 -; read -n1 -srp "Enter..." ;;
-    5) systemctl restart dropbear; echo -e "${GREEN}Dropbear Restarted!${NC}"; sleep 1 ;;
-    6) 
-       clear; for s in xray nginx ws-ssh dropbear fail2ban vnstat; do
-       systemctl is-active --quiet "$s" && echo -e " $s : ${GREEN}RUNNING${NC}" || echo -e " $s : ${RED}STOPPED${NC}"
-       done; read -n1 -srp "Enter..." ;;
-    7) m-bot ;;
-    8) tar -czf /root/Backup-VPS-$(date +%Y%m%d).tar.gz /etc/xray /etc/ssh /etc/nginx/conf.d 2>/dev/null; echo -e "${GREEN}Tersimpan di /root/${NC}"; sleep 1 ;;
-    9) 
-       read -rp " Nama file backup (/root/...): " F
-       [[ -f "$F" ]] && tar -xzf "$F" -C / && systemctl restart xray nginx && echo -e "${GREEN}Direstore!${NC}" || echo -e "${RED}Gagal${NC}"; sleep 1 ;;
-    10) 
-       read -rp " Domain Utama (Enter=Tetap): " D; [[ -n "$D" ]] && echo "$D" > /etc/xray/domain.txt
-       read -rp " Custom Bug SNI (Enter=Sama): " S; [[ -n "$S" ]] && echo "$S" > /etc/xray/sni.txt || cp /etc/xray/domain.txt /etc/xray/sni.txt
-       echo -e "${GREEN}Tersimpan!${NC}"; sleep 1 ;;
-    11) curl -sS https://www.cloudflare.com/cdn-cgi/trace | grep "warp="; read -n1 -srp "Enter..." ;;
-    12|13) jq '.outbounds' /usr/local/etc/xray/config.json; read -n1 -srp "Enter..." ;;
-    14) xray run -test -config /usr/local/etc/xray/config.json; read -n1 -srp "Enter..." ;;
-    15) systemctl restart xray nginx ws-ssh dropbear fail2ban; echo -e "${GREEN}Semua direstart!${NC}"; sleep 1 ;;
-    16) sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null; sysctl -w net.ipv4.tcp_syncookies=1 >/dev/null; echo -e "${GREEN}Keamanan Aktif!${NC}"; sleep 1 ;;
-    17) 
-       read -rp " Domain Baru: " ND; [[ -z "$ND" ]] && exit 0
-       echo "$ND" > /etc/xray/domain.txt; echo "$ND" > /etc/xray/sni.txt
-       systemctl stop nginx; certbot certonly --standalone --agree-tos --register-unsafely-without-email -d "$ND" --non-interactive 2>/dev/null
-       cp "/etc/letsencrypt/live/${ND}/fullchain.pem" /etc/xray/xray.crt 2>/dev/null
-       cp "/etc/letsencrypt/live/${ND}/privkey.pem" /etc/xray/xray.key 2>/dev/null
-       systemctl restart nginx xray; echo -e "${GREEN}Domain diubah!${NC}"; sleep 1 ;;
-    18) read -rp " Brand Baru: " B; [[ -n "$B" ]] && echo "$B" > /etc/xray/brand.txt; echo -e "${GREEN}Tersimpan!${NC}"; sleep 1 ;;
-    19) /usr/bin/auto-exp 2>/dev/null; echo -e "${GREEN}Dibersihkan!${NC}"; sleep 1 ;;
-    20) (crontab -l 2>/dev/null | grep -v "auto-exp"; echo "0 0 * * * /usr/bin/auto-exp") | crontab -; echo -e "${GREEN}Cron aktif!${NC}"; sleep 1 ;;
-    21) free -m; df -h /; uptime; read -n1 -srp "Enter..." ;;
-    x|X) menu ;;
-    *) m-feature ;;
-esac
-m-feature
-FEAT_EOF
-chmod +x /usr/bin/m-feature
-
-echo -e "${YELLOW}[3/4] Memperbarui Modul m-bot (Fungsional Penuh)...${NC}"
-cat << 'BOT_EOF' > /usr/bin/m-bot
-#!/bin/bash
-trap 'echo ""; /usr/bin/menu; exit 0' SIGINT
-clear
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'
-echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-echo -e "               ${CYAN}TELEGRAM BOT MANAGER${NC}"
-echo -e " ${BLUE}══════════════════════════════════════════════════${NC}"
-echo -e "  Status Bot : $(systemctl is-active bot-tele 2>/dev/null || echo 'inactive')"
-echo -e " ${BLUE}──────────────────────────────────────────────────${NC}"
-echo -e "  ${GREEN}1.)${NC} Setup / Ganti Token & Admin ID Bot"
-echo -e "  ${GREEN}2.)${NC} Restart Bot Telegram"
-echo -e "  ${GREEN}3.)${NC} Stop Bot Telegram"
-echo -e "  ${GREEN}4.)${NC} Test Notifikasi ke Admin"
-echo -e "  ${RED}x.)${NC} Kembali ke Menu"
-read -rp " Pilih [1-4 atau x] : " B_OPT
-trap 'echo ""; /usr/bin/m-bot; exit 0' SIGINT
-case $B_OPT in
-    1)
-        mkdir -p /etc/bot
-        read -rp " Bot Token (@BotFather) : " TKN
-        read -rp " Admin Chat ID : " AID
-        echo "TOKEN=$TKN" > /etc/bot/bot.conf
-        echo "ADMIN=$AID" >> /etc/bot/bot.conf
-        systemctl restart bot-tele 2>/dev/null
-        curl -s -X POST "https://api.telegram.org/bot${TKN}/sendMessage" -d chat_id="${AID}" -d text="✅ Bot Cassanova Terhubung!" >/dev/null 2>&1
-        echo -e " ${GREEN}Berhasil diatur!${NC}"; sleep 1 ;;
-    2) systemctl restart bot-tele; echo -e " ${GREEN}Di-restart!${NC}"; sleep 1 ;;
-    3) systemctl stop bot-tele; echo -e " ${RED}Dihentikan!${NC}"; sleep 1 ;;
-    4)
-        source /etc/bot/bot.conf 2>/dev/null
-        if [[ -n "$TOKEN" && -n "$ADMIN" ]]; then
-            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" -d chat_id="${ADMIN}" -d text="🔔 Tes Notifikasi Berhasil!" >/dev/null
-            echo -e " ${GREEN}Terkirim!${NC}"
-        else
-            echo -e " ${RED}Token belum diatur!${NC}"
-        fi
-        sleep 1 ;;
-    x|X) menu ;;
-    *) m-bot ;;
-esac
-m-bot
-BOT_EOF
-chmod +x /usr/bin/m-bot
-
-echo -e "${YELLOW}[4/4] Memperbarui Struktur Menu Protokol (VLESS, VMESS, TROJAN)...${NC}"
-for P in vless vmess trojan; do
-    UP=$(echo "$P" | tr 'a-z' 'A-Z')
-    cat << MENU_PROTO > "/usr/bin/m-${P}"
-#!/bin/bash
-trap 'echo ""; /usr/bin/menu; exit 0' SIGINT
-NC='\e[0m'; BLUE='\e[1;34m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'; RED='\e[1;31m'; CYAN='\e[1;36m'; MAGENTA='\e[1;35m'
-clear
-echo -e " \${BLUE}══════════════════════════════════════════════════\${NC}\n                      \${MAGENTA}${UP}\${NC}\n \${BLUE}══════════════════════════════════════════════════\${NC}"
-echo -e "  \${GREEN}1.)\${NC} Create             \${GREEN}6.)\${NC} Modify UUID\n  \${GREEN}2.)\${NC} Create Custom      \${GREEN}7.)\${NC} Check Login\n  \${GREEN}3.)\${NC} Delete             \${GREEN}8.)\${NC} List Users\n  \${GREEN}4.)\${NC} Renew              \${GREEN}9.)\${NC} Lock\n  \${GREEN}5.)\${NC} Check Config       \${GREEN}10.)\${NC} Unlock"
-echo -e " \${BLUE}──────────────────────────────────────────────────\${NC}"
-echo -e "  \${GREEN}11.)\${NC} Edit Limit IP     \${GREEN}12.)\${NC} Edit Limit BW\n  \${RED}x.)\${NC}  Back"
-read -rp " Pilih: " OPT
-trap 'echo ""; /usr/bin/m-${P}; exit 0' SIGINT
-case \$OPT in
-    1) xray-manager ${P} create ;; 2) xray-manager ${P} custom ;; 3) xray-manager ${P} delete ;;
-    4) xray-manager ${P} renew ;; 5) xray-manager ${P} check-config ;; 6) xray-manager ${P} modify ;;
-    7) xray-manager ${P} cek-login ;; 8) xray-manager ${P} list ;; 9) xray-manager ${P} lock ;;
-    10) xray-manager ${P} unlock ;; 11) xray-manager ${P} limit-ip ;; 12) xray-manager ${P} limit-bw ;;
-    x|X) menu ;; *) m-${P} ;;
-esac
-MENU_PROTO
-    chmod +x "/usr/bin/m-${P}"
+      printf '\nLogin SSH aktif:\n'
+      if command -v who >/dev/null; then who; else info 'Perintah who tidak tersedia.'; fi
+      printf '\nProses SSH per pengguna:\n'
+      ps -eo user,pid,args | awk '/sshd: [^ ]+@/ && !/awk/ {print}' || true
+      ;;
+    11)
+      printf '\nRecovery SSH hanya menyinkronkan metadata ke akun Linux yang MASIH ADA.\n'
+      printf 'Password lama tidak disimpan, jadi akun yang hilang tidak dapat dibuat ulang otomatis.\n'
+      read -rp 'Lanjutkan recovery? (ketik YA): ' confirm
+      if [[ "$confirm" == YA ]]; then
+        details_tmp=$(mktemp); recovered=0; missing=0; failed=0
+        while read -r marker ru rexp rstatus; do
+          [[ "$marker" == '###' && -n "$ru" ]] || continue
+          if getent passwd "$ru" >/dev/null; then
+            if chage -E "$rexp" "$ru"; then
+              if [[ "$rstatus" == locked || "$rstatus" == expired ]]; then passwd -l "$ru" >/dev/null 2>&1 || { failed=$((failed+1)); continue; }
+              else passwd -u "$ru" >/dev/null 2>&1 || true; fi
+              recovered=$((recovered+1))
+              jq -cn --arg username "$ru" --arg expiry "$rexp" --arg status "$rstatus" '{username:$username,expiry:$expiry,status:$status}' >> "$details_tmp"
+            else failed=$((failed+1)); fi
+          else missing=$((missing+1)); fi
+        done < <(grep '^### ' "$DB_FILE" || true)
+        details=$(jq -s '.' "$details_tmp"); rm -f "$details_tmp"
+        printf 'Recovery selesai. Sinkron: %s | Hilang: %s | Gagal: %s\n' "$recovered" "$missing" "$failed"
+        notify_event recovery '' '' '' "$details"
+      else info 'Recovery dibatalkan.'; fi
+      ;;
+    0) exit 0 ;;
+    *) fail 'Pilihan tidak dikenal.' ;;
+  esac
+  printf '\n'; read -rp 'Tekan Enter untuk kembali ke menu...'
 done
-
-echo -e "${GREEN}Semua modul (m-ssh, m-feature, m-bot, protokol) berhasil diperbarui dan aktif!${NC}"
-PATCH_EOF
-
-bash /root/update-semua-menu.sh
-rm -f /root/update-semua-menu.sh

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Cassanova Xray bandwidth enforcement every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=cassanova-bandwidth.service
+
+[Install]
+WantedBy=timers.target
