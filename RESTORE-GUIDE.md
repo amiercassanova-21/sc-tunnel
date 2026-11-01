@@ -13,7 +13,8 @@
 3. Transfer arsip dan file `.sha256` ke VPS tujuan.
 4. Jalankan `cassanova-restore /path/ke/Cassanova_bot_untuk_restore_vps_induk.tar.gz`.
 5. Baca peringatan, lalu ketik `RESTORE` untuk menyetujui.
-6. Periksa `systemctl --failed`, `systemctl status xray sing-box nginx ws-ssh bot-tele`, domain, firewall TCP/UDP, dan log service.
+6. Restore mengekstrak arsip tanpa mempercayai owner dari arsip, lalu secara eksplisit mengatur ulang grup `root:sing-box` dan mode `0640` untuk file JSON/certificate sing-box serta mode privat `0600` untuk database Hysteria2.
+7. Periksa `systemctl --failed`, `systemctl status xray sing-box nginx cassanova-dropbear bot-tele`, domain, firewall TCP/UDP, dan log service.
 
 ## Yang dicadangkan
 Konfigurasi Xray dan database VLESS/VMess/Trojan, konfigurasi sing-box dan database Hysteria2, konfigurasi bot, konfigurasi Nginx, sertifikat Let's Encrypt, konfigurasi SSH/Dropbear tertentu, unit service panel, script panel, serta crontab root.

@@ -66,10 +66,11 @@ Hysteria2 berjalan melalui **sing-box** sebagai service terpisah dari Xray. List
 
 - Menu: `menu` → `5) HYSTERIA2`
 - CLI: `hy2-manager create|custom|list|delete|renew|modify|lock|unlock|recover|check`
-- Database: `/etc/sing-box/users.json` (root-only, permission 600)
+- Database: `/var/lib/cassanova/hysteria2/users.json` (root-only, permission 600)
 - Konfigurasi: `/etc/sing-box/config.json`
 - Service: `sing-box`
 - Sertifikat harus CA-valid dan cocok dengan domain. Sertifikat self-signed tidak diterima oleh manager.
+- Database menerima tanggal kalender valid dengan format `YYYY-MM-DD`; akun aktif yang berakhir pada hari ini tetap valid sampai hari tersebut selesai.
 - Manager menggunakan sertifikat Let's Encrypt di `/etc/letsencrypt/live/<domain>/` bila tersedia, atau fallback ke `/etc/xray/xray.crt` dan `.key` setelah verifikasi CA.
 - Akun kedaluwarsa diproses setiap hari oleh `cassanova-expire.timer` (systemd).
 
@@ -78,7 +79,7 @@ Hysteria2 berjalan melalui **sing-box** sebagai service terpisah dari Xray. List
 
 ### Memasang Hysteria2 pada VPS yang sudah terpasang
 
-Jika VPS sudah menjalankan SC Cassanova versi sebelumnya, setelah seluruh file repository diperbarui jalankan sebagai root: `bash install-hysteria2.sh` (atau `install-hysteria2` bila file sudah dipasang ke `/usr/bin`). Script ini memasang sing-box, menyiapkan permission, menginstal manager, memperbarui menu dan integrasi daftar/status Telegram Bot. Script tidak menjalankan ulang seluruh installer VPS.
+Jika VPS sudah menjalankan SC Cassanova versi sebelumnya, setelah seluruh file repository diperbarui jalankan sebagai root: `bash install-hysteria2.sh` (atau `install-hysteria2` bila file sudah dipasang ke `/usr/bin`). Script ini memasang sing-box, menyiapkan permission, menginstal manager, memperbarui menu dan integrasi daftar/status Telegram Bot. Script membuat snapshot pra-instalasi di `/var/backups/cassanova/pre-hy2-install-*` sebelum perubahan. Script tidak menjalankan ulang seluruh installer VPS.
 
 
 ## Backup & Restore VPS Induk
@@ -89,12 +90,20 @@ Menu `FEATURES` menyediakan:
 
 Arsip berisi konfigurasi panel, database akun, sertifikat TLS/private key, konfigurasi bot, unit service panel, dan script panel. Arsip bersifat SANGAT RAHASIA karena dapat memuat token bot, password akun, dan private key. Simpan dengan permission terbatas; jangan unggah ke repository publik.
 
-Restore ditujukan untuk VPS baru Ubuntu 22.04+ atau Debian 12+. Arsip ini bukan image sistem penuh: `/etc/passwd`, `/etc/shadow`, group sistem, machine-id, konfigurasi jaringan, dan database paket tidak dipulihkan. Akun login Linux/SSH perlu dibuat ulang atau dimigrasikan terpisah. Sesudah restore, periksa domain/IP, firewall TCP dan UDP, port yang tersedia, konfigurasi Nginx/SSH, lalu status service.
+Restore ditujukan untuk VPS baru Ubuntu 22.04+ atau Debian 12+. Proses restore mengatur ulang permission dan grup `sing-box` agar service tetap dapat membaca config/certificate setelah ekstraksi aman. Arsip ini bukan image sistem penuh: `/etc/passwd`, `/etc/shadow`, group sistem, machine-id, konfigurasi jaringan, dan database paket tidak dipulihkan. Akun login Linux/SSH perlu dibuat ulang atau dimigrasikan terpisah. Sesudah restore, periksa domain/IP, firewall TCP dan UDP, port yang tersedia, konfigurasi Nginx/SSH, lalu status service.
 
+
+## Domain, TLS, dan keterbatasan fitur
+
+- `Change Domain VPS` memerlukan satu DNS A record yang mengarah langsung ke IPv4 publik VPS. Selama penerbitan sertifikat HTTP-01, matikan proxy Cloudflare (DNS only), pastikan TCP/80 dapat dijangkau, dan hapus/benahi AAAA record sementara karena utilitas ini memvalidasi IPv4 saja. Nginx dihentikan sementara lalu dikembalikan ke status sebelumnya.
+- `Custom SNI` hanya menerima nama yang tercakup dalam SAN sertifikat aktif; pengaturan ini tidak mengganti domain utama.
+- Fitur WARP hanya memeriksa status endpoint Cloudflare WARP, bukan memasang atau mengonfigurasi WARP.
+- Speedtest menggunakan paket `speedtest-cli` dari repository OS. BBR hanya diaktifkan jika kernel menyediakan algoritma BBR; SYN cookies tetap diuji terpisah.
+- OpenVPN, SSH-over-WebSocket khusus, limit IP per akun, serta limit bandwidth SSH/Hysteria2 belum tersedia. Limit bandwidth saat ini khusus VLESS/VMess/Trojan melalui Xray StatsService dengan interval sekitar 60 detik.
 
 ## Update Manager & GitHub Synchronization
 
-`update-sc` mengambil file runtime dan dokumentasi dari branch `main` repository GitHub. Semua file diunduh terlebih dahulu, lalu divalidasi (Bash/Python/VERSION). Sebelum pemasangan, updater membuat arsip pra-update beserta SHA256 di `/var/backups/cassanova/update/`. Pemasangan dilakukan melalui file sementara pada filesystem tujuan. Jika pemasangan gagal atau service `bot-tele` yang sebelumnya aktif gagal hidup kembali, updater mengembalikan file versi sebelumnya.
+`update-sc` mengambil file runtime dan dokumentasi dari branch `r6-testing` repository GitHub. Semua file diunduh terlebih dahulu, lalu divalidasi (Bash/Python/VERSION). Sebelum pemasangan, updater membuat arsip pra-update beserta SHA256 di `/var/backups/cassanova/update/`. Pemasangan dilakukan melalui file sementara pada filesystem tujuan. Jika pemasangan gagal atau service `bot-tele` yang sebelumnya aktif gagal hidup kembali, updater mengembalikan file versi sebelumnya.
 
 Updater tidak menghapus atau menimpa database akun, token bot, sertifikat TLS, atau konfigurasi layanan. `setup.sh` terbaru disimpan sebagai `/usr/local/share/cassanova/setup.sh` agar tidak mengganti installer yang sedang berjalan. `README.md` dan `RESTORE-GUIDE.md` disimpan di `/usr/local/share/cassanova/`.
 
@@ -102,7 +111,7 @@ See `CHANGELOG.md` for the current development changes.
 
 ## R4 — SSH, Hysteria2 & Telegram Lifecycle Integration
 
-The daily `cassanova-expire` systemd timer now runs expiry enforcement for Xray, Hysteria2, and SSH. Xray account changes use HandlerService through a loopback dokodemo-door inbound and do not restart Xray after one-time API activation. The API configuration is validated with the Xray config tester. SSH expiry locks expired accounts without restarting sshd. Hysteria2 config changes may require a sing-box restart; metadata-only changes skip it when the effective config is identical.
+The daily `cassanova-expire` systemd timer now runs expiry enforcement for Xray, Hysteria2, and SSH. Xray account changes use HandlerService through a loopback dokodemo-door inbound and do not restart Xray after one-time API activation. The API configuration is validated with the Xray config tester. SSH expiry locks expired accounts without restarting sshd. Hysteria2 account changes are written to a validated candidate config and use SIGHUP for sing-box reload; metadata-only changes skip reload when the effective config is identical. If reload fails, the manager restores the prior DB/config and attempts emergency service recovery. This does not guarantee uninterrupted existing sessions; verify the installed sing-box version on staging.
 
 Telegram notifications are delivered only to numeric IDs configured in `/etc/bot/bot.conf` (`ADMIN`). Notifications can contain credentials and links. Protect the bot config and Telegram admin accounts. SSH account passwords are not stored in the database, so SSH recovery cannot reconstruct missing Linux accounts or disclose old passwords.
 
@@ -127,7 +136,7 @@ The `cassanova-service` command provides guarded service operations:
 - `cassanova-service tls-check` — check certificate expiry, hostname, private-key match, and whether the leaf certificate chains to the system CA bundle.
 - `cassanova-service restart SERVICE` — restart an allowlisted service; Xray, sing-box, and Nginx are validated first.
 - `cassanova-service reload-nginx` — reload only after `nginx -t` succeeds and only if Nginx is already active.
-- `cassanova-service restart-all` — validate all three configuration engines first, then restart installed core services. SSH is deliberately excluded from restart-all to avoid interrupting the administrator's management session.
+- `cassanova-service restart-all` — asks for the explicit word `RESTART`, validates all three configuration engines, then restarts installed core services. OpenSSH and the Telegram bot are excluded; Dropbear may be restarted, so active Dropbear sessions can be interrupted.
 - `cassanova-service ui` — interactive service menu. The main menu option 10 and FEATURES option 23 open this manager.
 
 R2 does not automatically rewrite Nginx virtual hosts, change domains, issue certificates, open firewall ports, or modify Xray/sing-box transport definitions. Those actions need a separate transactional workflow and real VPS testing. A successful syntax/configuration check does not prove client connectivity.

@@ -50,9 +50,20 @@ echo -e "${BLUE}═════════════════════�
 echo -e "        ${GREEN}INSTALASI CASSANOVA TUNNELING V2 (MULTI-PORT)${NC}"
 echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
 read -rp " Masukkan Domain VPS Anda (Kosongkan = Pakai IP): " INPUT_DOM
-if [[ -n "$INPUT_DOM" && ! "$INPUT_DOM" =~ ^[A-Za-z0-9.-]+$ ]]; then
-    echo "[ERROR] Format domain tidak valid. Gunakan nama domain tanpa skema/port."
-    exit 1
+INPUT_DOM="${INPUT_DOM,,}"
+if [[ -n "$INPUT_DOM" ]]; then
+    DOMAIN_PATTERN='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+    IPV4_PATTERN='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+    DOMAIN_OK=0
+    if [[ "$INPUT_DOM" =~ $IPV4_PATTERN ]]; then
+        if awk -F. 'NF==4 && $1<=255 && $2<=255 && $3<=255 && $4<=255 {ok=1} END{exit !ok}' <<< "$INPUT_DOM"; then DOMAIN_OK=1; fi
+    elif (( ${#INPUT_DOM} <= 253 )) && [[ "$INPUT_DOM" =~ $DOMAIN_PATTERN ]]; then
+        DOMAIN_OK=1
+    fi
+    if (( DOMAIN_OK == 0 )); then
+        echo "[ERROR] Domain/IP tidak valid. Gunakan FQDN atau IPv4 tanpa http://, port, wildcard, atau slash."
+        exit 1
+    fi
 fi
 
 # Simpan snapshot konfigurasi yang mungkin disentuh sebelum instalasi.
@@ -67,7 +78,7 @@ for path in etc/nginx/nginx.conf etc/nginx/conf.d/xray.conf etc/nginx/conf.d/cas
             etc/systemd/system/bot-tele.service etc/systemd/system/cassanova-bandwidth.service etc/systemd/system/cassanova-bandwidth.timer etc/bot usr/bin/menu usr/bin/m-ssh \
             usr/bin/m-vless usr/bin/m-vmess usr/bin/m-trojan usr/bin/m-hysteria2 \
             usr/bin/m-feature usr/bin/m-bot usr/bin/xray-manager usr/bin/hy2-manager usr/bin/cassanova-service usr/bin/cassanova-bandwidth \
-            usr/bin/update-sc usr/bin/cassanova-ssh-expire var/lib/cassanova/bandwidth-xray.json usr/local/bin/bot-tele.py usr/local/share/cassanova root/.bashrc; do
+            usr/bin/update-sc usr/bin/cassanova-ssh-expire usr/bin/cassanova-expire usr/bin/cassanova-domain usr/bin/cassanova-backup usr/bin/cassanova-restore usr/local/bin/cassanova-notify.py etc/letsencrypt var/lib/cassanova/bandwidth-xray.json var/lib/cassanova/hysteria2 usr/local/bin/bot-tele.py usr/local/share/cassanova root/.bashrc; do
     [[ -e "/$path" || -L "/$path" ]] && BACKUP_PATHS+=("$path")
 done
 if ((${#BACKUP_PATHS[@]})); then
@@ -114,9 +125,32 @@ if ! getent group sing-box >/dev/null 2>&1; then groupadd --system sing-box; fi
 if ! getent passwd sing-box >/dev/null 2>&1; then
     useradd --system --gid sing-box --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin sing-box
 fi
-install -d -o root -g sing-box -m 0750 /etc/sing-box /var/backups/cassanova/hysteria2
-if [[ ! -s /etc/sing-box/users.json ]]; then printf '[]\n' > /etc/sing-box/users.json; fi
-chown root:root /etc/sing-box/users.json; chmod 0600 /etc/sing-box/users.json
+install -d -o root -g sing-box -m 0750 /etc/sing-box
+install -d -o root -g root -m 0700 /var/lib/cassanova/hysteria2 /var/backups/cassanova/hysteria2
+LEGACY_HY2_DB=/etc/sing-box/users.json
+HY2_DB=/var/lib/cassanova/hysteria2/users.json
+validate_hy2_db() {
+    jq -e 'type == "array" and all(.[]; type == "object" and (.username|type=="string" and test("^[A-Za-z0-9_.-]{1,32}$")) and (.password|type=="string" and test("^[A-Za-z0-9._~-]{12,128}$")) and (.expiry|type=="string") and (.expiry as $d | ($d|test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) and (try (($d|strptime("%Y-%m-%d")|mktime|strftime("%Y-%m-%d")) == $d) catch false)) and (.status=="active" or .status=="locked" or .status=="expired")) and (. as $rows | ([ $rows[].username ] | unique | length) == ($rows|length))' "$1" >/dev/null 2>&1
+}
+if [[ -e "$HY2_DB" ]] && ! validate_hy2_db "$HY2_DB"; then
+    echo "[ERROR] Database Hysteria2 baru rusak/tidak sesuai schema; tidak akan ditimpa."; exit 1
+fi
+if [[ -e "$LEGACY_HY2_DB" ]]; then
+    stamp=$(date +%Y%m%d-%H%M%S)
+    if [[ ! -e "$HY2_DB" ]]; then
+        if validate_hy2_db "$LEGACY_HY2_DB"; then
+            install -o root -g root -m 0600 "$LEGACY_HY2_DB" "$HY2_DB"
+            validate_hy2_db "$HY2_DB" || { rm -f "$HY2_DB"; echo "[ERROR] DB hasil migrasi gagal divalidasi; legacy tetap dipertahankan."; exit 1; }
+        else
+            mv -- "$LEGACY_HY2_DB" "/var/backups/cassanova/hysteria2/legacy-users-${stamp}.invalid.json.bak"
+            echo "[WARN] Database legacy tidak sesuai schema; disimpan utuh sebagai backup invalid." >&2
+        fi
+    fi
+    [[ ! -e "$LEGACY_HY2_DB" ]] || mv -- "$LEGACY_HY2_DB" "/var/backups/cassanova/hysteria2/legacy-users-${stamp}.json.bak"
+fi
+if [[ ! -e "$HY2_DB" ]]; then printf '[]\n' > "$HY2_DB"; chmod 0600 "$HY2_DB"; fi
+validate_hy2_db "$HY2_DB" || { echo "[ERROR] Database Hysteria2 tidak valid."; exit 1; }
+chown root:root "$HY2_DB"; chmod 0600 "$HY2_DB"
 if [[ ! -s /etc/sing-box/config.json ]]; then
     cat > /etc/sing-box/config.json <<'SBOX_EMPTY'
 {
@@ -302,6 +336,10 @@ FILES=(
     "modules/cassanova-backup.sh:/usr/bin/cassanova-backup"
     "modules/cassanova-restore.sh:/usr/bin/cassanova-restore"
     "modules/cassanova-service.sh:/usr/bin/cassanova-service"
+    "modules/cassanova-domain.sh:/usr/bin/cassanova-domain"
+    "modules/cassanova-cert-renew.sh:/etc/letsencrypt/renewal-hooks/deploy/50-cassanova.sh"
+    "modules/cassanova-cert-pre.sh:/etc/letsencrypt/renewal-hooks/pre/50-cassanova-stop-nginx.sh"
+    "modules/cassanova-cert-post.sh:/etc/letsencrypt/renewal-hooks/post/50-cassanova-start-nginx.sh"
     "bot-tele.py:/usr/local/bin/bot-tele.py"
     "update.sh:/usr/bin/update-sc"
 )
@@ -328,9 +366,16 @@ for ITEM in "${FILES[@]}"; do
 done
 for ITEM in "${FILES[@]}"; do
     DEST="${ITEM#*:}"
-    install -D -m 0755 "${STAGE}/$(basename "$DEST")" "$DEST"
+    MODE=0755
+    case "$DEST" in
+        /etc/systemd/system/*.service|/etc/systemd/system/*.timer) MODE=0644 ;;
+        /etc/letsencrypt/renewal-hooks/*/*) MODE=0755 ;;
+        /usr/local/bin/*.py) MODE=0644 ;;
+    esac
+    install -D -m "$MODE" "${STAGE}/$(basename "$DEST")" "$DEST"
 done
 chmod 0644 /usr/local/bin/bot-tele.py /usr/local/bin/cassanova-notify.py /usr/local/share/cassanova/VERSION
+chmod 0755 /usr/bin/cassanova-domain /etc/letsencrypt/renewal-hooks/deploy/50-cassanova.sh /etc/letsencrypt/renewal-hooks/pre/50-cassanova-stop-nginx.sh /etc/letsencrypt/renewal-hooks/post/50-cassanova-start-nginx.sh
 
 cat << 'EXP_SVC' > /etc/systemd/system/cassanova-expire.service
 [Unit]
@@ -392,7 +437,8 @@ BW_TIMER
 cat << 'BOT_SVC' > /etc/systemd/system/bot-tele.service
 [Unit]
 Description=Cassanova Telegram Bot Panel
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
@@ -433,6 +479,7 @@ if ! sing-box check -c /etc/sing-box/config.json; then
     echo "Snapshot pra-instalasi: $BACKUP_DIR"
     exit 1
 fi
+chmod 0644 /etc/systemd/system/cassanova-expire.service /etc/systemd/system/cassanova-expire.timer /etc/systemd/system/cassanova-bandwidth.service /etc/systemd/system/cassanova-bandwidth.timer /etc/systemd/system/bot-tele.service
 systemctl daemon-reload
 for svc in xray nginx cassanova-dropbear fail2ban vnstat sing-box; do
     if ! systemctl enable "$svc" >/dev/null 2>&1; then
@@ -450,7 +497,7 @@ systemctl enable --now cassanova-expire.timer >/dev/null 2>&1 || echo "[WARN] Ti
 systemctl daemon-reload
 if jq -e '((.api.services // []) | index("StatsService") != null) and any(.inbounds[]?; .tag == "api-in" and .port == 10085) and any(.routing.rules[]?; ((.inboundTag // []) | index("api-in") != null) and .outboundTag == "api")' /usr/local/etc/xray/config.json >/dev/null 2>&1; then systemctl enable --now cassanova-bandwidth.timer >/dev/null 2>&1 || echo "[WARN] Timer bandwidth belum dapat diaktifkan. Periksa systemctl status cassanova-bandwidth.timer."; fi
 # Bot opsional sampai token dan admin dikonfigurasi.
-if [[ -s /etc/bot/token && -s /etc/bot/admin ]]; then
+if [[ -s /etc/bot/bot.conf ]] && grep -Eq '^TOKEN=.+$' /etc/bot/bot.conf && grep -Eq '^ADMIN=[1-9][0-9]{4,19}(,[1-9][0-9]{4,19})*$' /etc/bot/bot.conf; then
     systemctl enable bot-tele >/dev/null 2>&1 || true
     if ! systemctl restart bot-tele; then
         echo "[WARN] Telegram Bot gagal start; engine protokol utama tetap berjalan."

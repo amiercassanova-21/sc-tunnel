@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Cassanova Tunneling Telegram control bot (stdlib only)."""
 from __future__ import annotations
+import fcntl
 import html
 import json
 import logging
@@ -14,17 +15,21 @@ import urllib.request
 from pathlib import Path
 
 CONF_FILE = Path('/etc/bot/bot.conf')
+STATE_DIR = Path('/var/lib/cassanova')
+OFFSET_FILE = STATE_DIR / 'bot-offset'
+LOCK_FILE = Path('/run/lock/cassanova-bot.lock')
 LOG_LEVEL = os.environ.get('BOT_LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO),
                     format='%(asctime)s %(levelname)s %(message)s')
 LOG = logging.getLogger('cassanova-bot')
-ALLOWED_SERVICES = ('xray', 'sing-box', 'nginx', 'ws-ssh', 'dropbear')
+STATUS_SERVICES = ('xray', 'sing-box', 'nginx', 'cassanova-dropbear', 'ssh', 'bot-tele')
+RESTART_SERVICES = ('xray', 'sing-box', 'nginx', 'cassanova-dropbear')
 DB_FILES = {
     'VLESS': Path('/etc/xray/vless.db'),
     'VMESS': Path('/etc/xray/vmess.db'),
     'TROJAN': Path('/etc/xray/trojan.db'),
     'SSH': Path('/etc/ssh/.ssh.db'),
-    'HYSTERIA2': Path('/etc/sing-box/users.json'),
+    'HYSTERIA2': Path('/var/lib/cassanova/hysteria2/users.json'),
 }
 
 
@@ -44,7 +49,7 @@ def load_conf() -> dict[str, str]:
 
 def allowed_ids(conf: dict[str, str]) -> set[str]:
     raw = conf.get('ADMIN', '')
-    return {item.strip() for item in raw.split(',') if re.fullmatch(r'-?\d+', item.strip())}
+    return {item.strip() for item in raw.split(',') if re.fullmatch(r'[1-9][0-9]{4,19}', item.strip())}
 
 
 def api_call(token: str, method: str, payload: dict | None = None) -> dict:
@@ -80,10 +85,23 @@ def keyboard() -> str:
 
 
 def send(token: str, chat_id: str, text: str, markup: bool = True) -> None:
-    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
-    if markup:
-        payload['reply_markup'] = keyboard()
-    api_call(token, 'sendMessage', payload)
+    # Split on line boundaries to avoid truncating HTML tags/entities mid-message.
+    chunks: list[str] = []
+    current = ''
+    for line in text.splitlines() or ['']:
+        candidate = line if not current else current + '\n' + line
+        if len(candidate) > 3800 and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    for index, chunk in enumerate(chunks):
+        payload = {'chat_id': chat_id, 'text': chunk, 'parse_mode': 'HTML', 'disable_web_page_preview': True}
+        if markup and index == 0:
+            payload['reply_markup'] = keyboard()
+        api_call(token, 'sendMessage', payload)
 
 
 def account_lines(path: Path, label: str) -> list[str]:
@@ -116,9 +134,9 @@ def account_lines(path: Path, label: str) -> list[str]:
 
 def status_text() -> str:
     states = []
-    for service in ALLOWED_SERVICES:
+    for service in STATUS_SERVICES:
         state = run_command(['/usr/bin/systemctl', 'is-active', service]) or 'unknown'
-        states.append(f'• {service}: <b>{html.escape(state)}</b>')
+        states.append(f'• {html.escape(service)}: <b>{html.escape(state)}</b>')
     ram = run_command(['/usr/bin/free', '-h'])
     ram_line = next((line for line in ram.splitlines() if line.startswith('Mem:')), 'Tidak tersedia')
     domain = 'Belum diatur'
@@ -138,59 +156,88 @@ def handle_action(token: str, chat_id: str, action: str) -> None:
         sections = []
         for label, path in DB_FILES.items():
             sections.append(f'<b>{label}</b>\n' + '\n'.join(account_lines(path, label)))
-        text = '📋 <b>DAFTAR AKUN</b>\n\n' + '\n\n'.join(sections)
-        # Telegram message limit is 4096 chars.
-        send(token, chat_id, text[:3900])
+        send(token, chat_id, '📋 <b>DAFTAR AKUN</b>\n\n' + '\n\n'.join(sections))
     elif action == 'restart':
         results = []
-        for service in ALLOWED_SERVICES:
-            out = run_command(['/usr/bin/systemctl', 'restart', service], timeout=20)
+        for service in RESTART_SERVICES:
+            output = run_command(['/usr/bin/cassanova-service', 'restart', service], timeout=30)
             state = run_command(['/usr/bin/systemctl', 'is-active', service]) or 'unknown'
-            results.append(f'• {service}: <b>{html.escape(state)}</b>')
+            detail = f' — {html.escape(output[:250])}' if state != 'active' and output else ''
+            results.append(f'• {html.escape(service)}: <b>{html.escape(state)}</b>{detail}')
         send(token, chat_id, '🔄 <b>Hasil restart</b>\n' + '\n'.join(results))
     elif action == 'clean':
-        cleaner = Path('/usr/bin/auto-exp')
+        cleaner = Path('/usr/bin/cassanova-expire')
         if not cleaner.is_file() or not os.access(cleaner, os.X_OK):
-            send(token, chat_id, '⚠️ Program auto-exp tidak ditemukan atau tidak executable.')
+            send(token, chat_id, '⚠️ Program cassanova-expire tidak ditemukan atau tidak executable.')
             return
-        output = run_command([str(cleaner)], timeout=60)
-        hy2_output = run_command(['/usr/bin/hy2-manager', 'expire'], timeout=60)
-        combined = '\n'.join(part for part in (output, hy2_output) if part)
-        send(token, chat_id, '🧹 Proses pembersihan selesai.' + (f'\n<code>{html.escape(combined[:1000])}</code>' if combined else ''))
+        output = run_command([str(cleaner)], timeout=120)
+        send(token, chat_id, '🧹 <b>Rekonsiliasi expiry selesai.</b>' +
+             (f'\n<code>{html.escape(output[:2500])}</code>' if output else '\nTidak ada output. Periksa journal service untuk detail.'))
+
+
+def read_offset() -> int:
+    try:
+        return max(0, int(OFFSET_FILE.read_text().strip()))
+    except (OSError, ValueError):
+        return 0
+
+
+def save_offset(offset: int) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(STATE_DIR, 0o700)
+    tmp = OFFSET_FILE.with_suffix('.tmp')
+    tmp.write_text(f'{offset}\n', encoding='ascii')
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, OFFSET_FILE)
+
+
+def authorised_private_user(container: dict, actor: dict, admins: set[str]) -> bool:
+    chat = container.get('chat') or {}
+    user_id = str(actor.get('id', ''))
+    return chat.get('type') == 'private' and user_id in admins and str(chat.get('id', '')) == user_id
 
 
 def main() -> None:
-    offset = 0
-    while True:
-        conf = load_conf()
-        token = conf.get('TOKEN', '').strip()
-        admins = allowed_ids(conf)
-        if not token or not admins:
-            time.sleep(5)
-            continue
-        updates = api_call(token, 'getUpdates', {'offset': offset, 'timeout': 25, 'allowed_updates': json.dumps(['message', 'callback_query'])})
-        if not updates.get('ok'):
-            time.sleep(3)
-            continue
-        for update in updates.get('result', []):
-            offset = max(offset, int(update.get('update_id', 0)) + 1)
-            callback = update.get('callback_query')
-            if callback:
-                message = callback.get('message') or {}
-                chat_id = str((message.get('chat') or {}).get('id', ''))
-                api_call(token, 'answerCallbackQuery', {'callback_query_id': callback.get('id', '')})
-                if chat_id not in admins:
-                    continue
-                handle_action(token, chat_id, str(callback.get('data', '')))
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with LOCK_FILE.open('w') as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            LOG.error('Instance bot lain sudah berjalan; proses kedua dihentikan.')
+            return
+        offset = read_offset()
+        while True:
+            conf = load_conf()
+            token = conf.get('TOKEN', '').strip()
+            admins = allowed_ids(conf)
+            if not token or not admins:
+                time.sleep(5)
                 continue
-            message = update.get('message') or {}
-            chat_id = str((message.get('chat') or {}).get('id', ''))
-            if chat_id not in admins:
+            updates = api_call(token, 'getUpdates', {'offset': offset, 'timeout': 25,
+                                 'allowed_updates': json.dumps(['message', 'callback_query'])})
+            if not updates.get('ok'):
+                time.sleep(3)
                 continue
-            text = str(message.get('text', '')).strip()
-            if text.lower() in ('/start', '/menu'):
-                send(token, chat_id, '🤖 <b>CASSANOVA TUNNELING BOT PANEL</b>\nAkses administrator terverifikasi.')
-        time.sleep(0.5)
+            for update in updates.get('result', []):
+                update_id = int(update.get('update_id', 0))
+                callback = update.get('callback_query')
+                if callback:
+                    message = callback.get('message') or {}
+                    actor = callback.get('from') or {}
+                    api_call(token, 'answerCallbackQuery', {'callback_query_id': callback.get('id', '')})
+                    if authorised_private_user(message, actor, admins):
+                        handle_action(token, str((message.get('chat') or {}).get('id', '')), str(callback.get('data', '')))
+                else:
+                    message = update.get('message') or {}
+                    actor = message.get('from') or {}
+                    if authorised_private_user(message, actor, admins):
+                        chat_id = str((message.get('chat') or {}).get('id', ''))
+                        if str(message.get('text', '')).strip().lower() in ('/start', '/menu'):
+                            send(token, chat_id, '🤖 <b>CASSANOVA TUNNELING BOT PANEL</b>\nAkses administrator terverifikasi.')
+                offset = max(offset, update_id + 1)
+                # Commit only after a given update has been handled, so restarts do not replay old callbacks.
+                save_offset(offset)
+            time.sleep(0.5)
 
 
 if __name__ == '__main__':

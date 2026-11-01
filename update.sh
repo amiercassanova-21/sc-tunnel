@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-readonly REPO='https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main'
+readonly REPO='https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/r6-testing'
 readonly BACKUP_ROOT='/var/backups/cassanova/update'
 readonly LOCK_FILE='/run/lock/cassanova-update.lock'
 readonly VERSION_FILE='/usr/local/share/cassanova/VERSION'
@@ -42,6 +42,10 @@ TARGETS=(
   'modules/cassanova-backup.sh|/usr/bin/cassanova-backup|0755'
   'modules/cassanova-restore.sh|/usr/bin/cassanova-restore|0755'
   'modules/cassanova-service.sh|/usr/bin/cassanova-service|0755'
+  'modules/cassanova-domain.sh|/usr/bin/cassanova-domain|0755'
+  'modules/cassanova-cert-renew.sh|/etc/letsencrypt/renewal-hooks/deploy/50-cassanova.sh|0755'
+  'modules/cassanova-cert-pre.sh|/etc/letsencrypt/renewal-hooks/pre/50-cassanova-stop-nginx.sh|0755'
+  'modules/cassanova-cert-post.sh|/etc/letsencrypt/renewal-hooks/post/50-cassanova-start-nginx.sh|0755'
   'bot-tele.py|/usr/local/bin/bot-tele.py|0644'
   'systemd/cassanova-expire.service|/etc/systemd/system/cassanova-expire.service|0644'
   'systemd/cassanova-expire.timer|/etc/systemd/system/cassanova-expire.timer|0644'
@@ -60,7 +64,7 @@ BOT_WAS_ACTIVE=0
 cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 
-log INFO 'Mengambil seluruh file dari branch main dan memvalidasi sebelum perubahan.'
+log INFO 'Mengambil seluruh file dari branch r6-testing dan memvalidasi sebelum perubahan.'
 mkdir -p "$STAGE/download" "$STAGE/rollback"
 
 for item in "${TARGETS[@]}"; do
@@ -83,7 +87,7 @@ done
 for required in \
   'modules/xray-manager.sh' 'modules/cassanova-notify.py' 'modules/cassanova-bandwidth.py' 'modules/cassanova-expire.sh' 'modules/cassanova-ssh-expire.sh' 'modules/hy2-manager.sh' 'modules/m-feature.sh' \
   'modules/m-bot.sh' 'modules/cassanova-backup.sh' 'modules/cassanova-restore.sh' \
-  'modules/cassanova-service.sh' \
+  'modules/cassanova-service.sh' 'modules/cassanova-domain.sh' 'modules/cassanova-cert-renew.sh' 'modules/cassanova-cert-pre.sh' 'modules/cassanova-cert-post.sh' \
   'bot-tele.py' 'systemd/cassanova-expire.service' 'systemd/cassanova-expire.timer' 'systemd/cassanova-bandwidth.service' 'systemd/cassanova-bandwidth.timer' 'setup.sh'; do
   found=0
   for item in "${TARGETS[@]}"; do IFS='|' read -r src _ _ <<< "$item"; [[ "$src" == "$required" ]] && found=1; done
@@ -151,6 +155,17 @@ for index in "${!TARGETS[@]}"; do
     die "Gagal memasang $dest. Perubahan dibatalkan."
   fi
 done
+
+# Validate live engine/web configuration after replacing runtime scripts, before restarting anything.
+if command -v xray >/dev/null 2>&1 && [[ -s /usr/local/etc/xray/config.json ]]; then
+  if ! xray run -test -config /usr/local/etc/xray/config.json >/dev/null; then rollback; die 'Validasi konfigurasi Xray gagal; file versi lama dipulihkan.'; fi
+fi
+if command -v sing-box >/dev/null 2>&1 && [[ -s /etc/sing-box/config.json ]]; then
+  if ! sing-box check -c /etc/sing-box/config.json >/dev/null; then rollback; die 'Validasi konfigurasi sing-box gagal; file versi lama dipulihkan.'; fi
+fi
+if command -v nginx >/dev/null 2>&1; then
+  if ! nginx -t >/dev/null; then rollback; die 'Validasi konfigurasi Nginx gagal; file versi lama dipulihkan.'; fi
+fi
 
 # Reload systemd metadata; enable expiry timer only if Xray API is already listening locally.
 systemctl daemon-reload

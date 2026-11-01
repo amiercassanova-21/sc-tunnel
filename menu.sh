@@ -30,7 +30,7 @@ TOTAL_SSH=$(grep -E "^### " /etc/ssh/.ssh.db 2>/dev/null | wc -l)
 TOTAL_VMESS=$(grep -E "^### " /etc/xray/vmess.db 2>/dev/null | wc -l)
 TOTAL_VLESS=$(grep -E "^### " /etc/xray/vless.db 2>/dev/null | wc -l)
 TOTAL_TROJAN=$(grep -E "^### " /etc/xray/trojan.db 2>/dev/null | wc -l)
-TOTAL_HY2=$(jq 'length' /etc/sing-box/users.json 2>/dev/null || echo 0)
+TOTAL_HY2=$(jq 'length' /var/lib/cassanova/hysteria2/users.json 2>/dev/null || echo 0)
 
 CURR_MONTH=$(date +%B)
 CURR_DAY=$(date +%A)
@@ -66,16 +66,18 @@ fi
 [[ -z "$DAY_TX" || "$DAY_TX" == *"*"* ]] && DAY_TX="0.00 GiB"
 [[ -z "$TRAFFIC" ]] && TRAFFIC="0.00 Mbit/s"
 
-VERSION=$(cat /usr/local/share/cassanova/VERSION 2>/dev/null || echo "2.3.0-r3-dev")
+VERSION=$(cat /usr/local/share/cassanova/VERSION 2>/dev/null || echo "unknown-r6")
 ORDER_BY=$(cat /etc/xray/order.txt 2>/dev/null || echo "Cassanova VIP")
 CLIENT_NAME=$(cat /etc/xray/client.txt 2>/dev/null || echo "$(hostname)")
 EXP_DAYS=$(cat /etc/xray/exp.txt 2>/dev/null || echo "Lifetime")
+BRAND_NAME=$(cat /etc/xray/brand.txt 2>/dev/null || echo "Cassanova Tunneling")
 
 # Banner CASSANOVA (Kotak Penuh 50 Karakter)
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}       ${RED}█▀▀ █▀█ █▀▀ █▀▀ █▀█ █▄ █ █▀█ █ █ █▀█${NC}       ${BLUE}│${NC}"
 echo -e " ${BLUE}│${NC}       ${WHITE}█▄▄ █▀█ ▄██ ▄██ █▀█ █ ▀█ █▄█ ▀▄▀ █▀█${NC}       ${BLUE}│${NC}"
 echo -e " ${BLUE}│${NC}            ${CYAN}• CASSANOVA TUNNELING V2 •${NC}            ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC}                 ${WHITE}${BRAND_NAME}${NC}"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
 # Info Sistem (Hanya Garis Kiri)
@@ -107,7 +109,7 @@ echo -e " ${BLUE}└────────────────────
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}                  ${GREEN}LIST ACCOUNTS${NC}"
 echo -e " ${BLUE}│${NC} ${RED}──────────────────────────────────────────────────${NC}"
-printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "SSH/OPENVPN" "$TOTAL_SSH"
+printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "SSH" "$TOTAL_SSH"
 printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "VMESS" "$TOTAL_VMESS"
 printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "VLESS" "$TOTAL_VLESS"
 printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "TROJAN" "$TOTAL_TROJAN"
@@ -126,12 +128,31 @@ echo -e " ${BLUE}└────────────────────
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}  ${GREEN}1.)${NC} ⌨ SSH                 ${GREEN}6.)${NC} ⌨ SETUP BOT"
 echo -e " ${BLUE}│${NC}  ${GREEN}2.)${NC} ⌨ VMESS               ${GREEN}7.)${NC} ⌨ FEATURES"
-echo -e " ${BLUE}│${NC}  ${GREEN}3.)${NC} ⌨ VLESS               ${GREEN}8.)${NC} ⌨ SET REDUCE/TIME"
+echo -e " ${BLUE}│${NC}  ${GREEN}3.)${NC} ⌨ VLESS               ${GREEN}8.)${NC} ⌨ SET EXPIRY LABEL"
 echo -e " ${BLUE}│${NC}  ${GREEN}4.)${NC} ⌨ TROJAN              ${GREEN}9.)${NC} ⌨ SET BRAND NAME"
 echo -e " ${BLUE}│${NC}  ${GREEN}5.)${NC} ⌨ HYSTERIA2           ${GREEN}10.)${NC} ⌨ CHECK SERVICES"
 echo -e " ${BLUE}│${NC}  ${RED}x.)${NC} ⌨ EXIT"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 echo ""
+
+set_expiry_label() {
+    local value pattern='^[A-Za-z0-9][-A-Za-z0-9 ._+]{0,31}$'
+    read -rp " Label masa aktif yang ditampilkan (mis. Lifetime / 30 Days): " value
+    [[ "$value" =~ $pattern ]] || { echo "Label tidak valid (maks. 32 karakter; huruf/angka/spasi/._+-)."; sleep 1; return; }
+    install -d -m 0755 /etc/xray
+    printf '%s\n' "$value" > /etc/xray/exp.txt
+    chmod 0644 /etc/xray/exp.txt
+    echo "Label masa aktif berhasil disimpan."; sleep 1
+}
+set_brand_name() {
+    local value pattern='^[A-Za-z0-9][-A-Za-z0-9 ._+]{0,31}$'
+    read -rp " Nama brand panel (maksimal 32 karakter): " value
+    [[ "$value" =~ $pattern ]] || { echo "Nama tidak valid (maks. 32 karakter; huruf/angka/spasi/._+-)."; sleep 1; return; }
+    install -d -m 0755 /etc/xray
+    printf '%s\n' "$value" > /etc/xray/brand.txt
+    chmod 0644 /etc/xray/brand.txt
+    echo "Brand berhasil disimpan."; sleep 1
+}
 
 read -rp " Select From Options [1-10 or x] : " OPTION
 case $OPTION in
@@ -142,8 +163,8 @@ case $OPTION in
     5) m-hysteria2 ;;
     6) m-bot ;;
     7) m-feature ;;
-    8) set-time ;;
-    9) set-brand ;;
+    8) set_expiry_label ;;
+    9) set_brand_name ;;
     10) cassanova-service ui ;;
     x|X) exit 0 ;;
     *) echo -e "${RED}Pilihan tidak valid!${NC}"; sleep 1 ;;
