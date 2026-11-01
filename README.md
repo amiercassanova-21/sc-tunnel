@@ -11,7 +11,7 @@ Installer panel tunneling untuk **Ubuntu 22.04+** dan **Debian 12+** (rilis mayo
 ```bash
 apt-get update
 apt-get install -y curl ca-certificates
-bash <(curl -fsSL https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main/setup.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/r6-testing/setup.sh)
 ```
 
 ## Menu dan update
