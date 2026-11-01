@@ -205,7 +205,11 @@ def main() -> int:
     LIMIT_DIR.mkdir(parents=True, exist_ok=True)
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     with LOCK.open("a") as lockf:
-        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("Proses bandwidth enforcement lain masih berjalan; pemeriksaan ini dilewati.")
+            return 0
         state = read_state()
         if len(sys.argv) == 4 and sys.argv[1] == "--reset":
             proto, username = sys.argv[2], sys.argv[3]

@@ -75,7 +75,7 @@ def main() -> int:
         return 2
     conf = read_config()
     token = conf.get('TOKEN', '').strip()
-    admins = [x.strip() for x in conf.get('ADMIN', '').split(',') if re.fullmatch(r'-?\d+', x.strip())]
+    admins = [x.strip() for x in conf.get('ADMIN', '').split(',') if re.fullmatch(r'[1-9][0-9]{4,19}', x.strip())]
     if not token or not admins:
         print('Telegram token/admin belum dikonfigurasi; notifikasi tidak dikirim.', file=sys.stderr)
         return 1

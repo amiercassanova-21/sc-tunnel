@@ -15,15 +15,32 @@ TMP=$(mktemp)
 DETAILS_TMP=$(mktemp)
 trap 'rm -f "$TMP" "$DETAILS_TMP"' EXIT
 changed=0
+failures=0
 while IFS= read -r line || [[ -n "$line" ]]; do
   if [[ "$line" =~ ^###\  ]]; then
     read -r marker user expiry status _ <<< "$line"
-    if [[ "$expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$expiry" < "$TODAY" && "$status" != expired ]]; then
-      passwd -l "$user" >/dev/null 2>&1 || true
-      chage -E "$expiry" "$user" >/dev/null 2>&1 || true
-      printf '### %s %s expired\n' "$user" "$expiry" >> "$TMP"
-      jq -cn --arg username "$user" --arg expiry "$expiry" --arg status expired '{username:$username,expiry:$expiry,status:$status}' >> "$DETAILS_TMP"
-      changed=$((changed+1))
+    if [[ "$expiry" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      if [[ "$expiry" < "$TODAY" && "$status" != expired ]]; then
+        if passwd -l "$user" >/dev/null 2>&1 && chage -E "$expiry" "$user" >/dev/null 2>&1; then
+          printf '### %s %s expired\n' "$user" "$expiry" >> "$TMP"
+          jq -cn --arg username "$user" --arg expiry "$expiry" --arg status expired '{username:$username,expiry:$expiry,status:$status}' >> "$DETAILS_TMP"
+          changed=$((changed+1))
+        else
+          echo "Gagal mengunci/menetapkan expiry Linux untuk akun $user; metadata tetap dipertahankan." >&2
+          printf '%s\n' "$line" >> "$TMP"
+          failures=$((failures+1))
+        fi
+      elif [[ ! "$expiry" < "$TODAY" && "$status" != expired ]]; then
+        # Keep a non-expired SSH account valid through the displayed expiry date.
+        linux_expiry=$(date -d "${expiry} + 1 day" +%F) || { echo "Tanggal expiry tidak valid: $user" >&2; failures=$((failures+1)); printf '%s\n' "$line" >> "$TMP"; continue; }
+        if ! chage -E "$linux_expiry" "$user" >/dev/null 2>&1; then
+          echo "Gagal menyelaraskan expiry Linux untuk akun $user." >&2
+          failures=$((failures+1))
+        fi
+        printf '%s\n' "$line" >> "$TMP"
+      else
+        printf '%s\n' "$line" >> "$TMP"
+      fi
     else
       printf '%s\n' "$line" >> "$TMP"
     fi
@@ -40,4 +57,6 @@ if (( changed )); then
       || echo 'SSH expiry enforced, but Telegram notification failed.' >&2
   fi
 fi
-printf 'SSH expiry enforcement complete: %s account(s) newly expired.\n' "$changed"
+if (( failures )); then echo 'Sebagian akun tidak berhasil disinkronkan; metadata yang gagal dipertahankan untuk percobaan berikutnya.' >&2; fi
+printf 'SSH expiry enforcement complete: %s account(s) newly expired; %s error(s).\n' "$changed" "$failures"
+(( failures == 0 )) || exit 1

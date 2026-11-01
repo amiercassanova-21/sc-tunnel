@@ -75,13 +75,6 @@ notify_event() {
     '{event:$event,protocol:$protocol,username:$username,expiry:$expiry,credential:$credential,context:$context,details:$details}' \
     | python3 "$NOTIFIER" || info 'Gagal mengirim notifikasi Telegram; operasi akun tetap berhasil.'
 }
-choose_user() {
-  local input
-  read -rp 'Username atau nomor: ' input
-  if [[ "$input" =~ ^[0-9]+$ ]]; then
-    awk '$1=="###" {n++; if(n==ARGV[1]) print $2}' "$input" "$DB_FILE" 2>/dev/null
-  else printf '%s' "$input"; fi
-}
 list_users() {
   printf '\n%-4s %-18s %-14s %-12s %-10s\n' 'NO' 'USERNAME' 'EXPIRED' 'ACCOUNT' 'STATUS'
   local n=0 user expiry status account
@@ -131,7 +124,8 @@ while true; do
       fi
       if getent passwd "$user" >/dev/null || [[ -n "$(find_record "$user")" ]]; then fail 'Username sudah digunakan.'; read -rp 'Enter...'; continue; fi
       expiry=$(date -d "+${days} days" +%F)
-      if ! useradd -M -s /usr/sbin/nologin -e "$expiry" "$user"; then fail 'Gagal membuat akun sistem.'; read -rp 'Enter...'; continue; fi
+      linux_expiry=$(date -d "${expiry} + 1 day" +%F)
+      if ! useradd -M -s /usr/sbin/nologin -e "$linux_expiry" "$user"; then fail 'Gagal membuat akun sistem.'; read -rp 'Enter...'; continue; fi
       if ! printf '%s:%s\n' "$user" "$password" | chpasswd; then userdel "$user"; fail 'Gagal menetapkan password.'; read -rp 'Enter...'; continue; fi
       record_set "$user" "$expiry" unlocked
       printf '\n'; ok 'Akun berhasil dibuat.'; printf 'Username: %s\nPassword: %s\nExpired : %s\n' "$user" "$password" "$expiry"
@@ -154,8 +148,12 @@ while true; do
           (( old_ts < now )) && base=$now || base=$old_ts
           expiry=$(date -d "@$((base + days*86400))" +%F)
           old_status=$(awk '{print $4}' <<< "$rec")
-          if chage -E "$expiry" "$user"; then
-            if [[ "$old_status" == expired ]]; then passwd -u "$user" >/dev/null 2>&1 || true; old_status=unlocked; fi
+          linux_expiry=$(date -d "${expiry} + 1 day" +%F)
+          if chage -E "$linux_expiry" "$user"; then
+            if [[ "$old_status" == expired ]]; then
+              if passwd -u "$user" >/dev/null 2>&1; then old_status=unlocked
+              else fail 'Tanggal expiry diperbarui, tetapi akun gagal dibuka. Metadata tetap expired; periksa passwd -S.'; read -rp 'Enter untuk lanjut...'; continue; fi
+            fi
             record_set "$user" "$expiry" "$old_status"; ok "Masa aktif diperbarui sampai $expiry."; notify_event renew "$user" "$expiry"
           else fail 'Gagal memperbarui expiry Linux.'; fi
         else fail 'Jumlah hari tidak valid.'; fi
@@ -179,10 +177,26 @@ while true; do
       ;;
     7|8)
       read -rp 'Username: ' user; rec=$(find_record "$user")
-      if [[ -z "$rec" ]] || ! getent passwd "$user" >/dev/null; then fail 'Akun tidak ditemukan.'; else
+      if [[ -z "$rec" ]] || ! getent passwd "$user" >/dev/null; then
+        fail 'Akun tidak ditemukan.'
+      else
         expiry=$(awk '{print $3}' <<< "$rec")
-        if [[ "$choice" == 7 ]]; then if passwd -l "$user" >/dev/null; then record_set "$user" "$expiry" locked; ok 'Akun dikunci.'; notify_event lock "$user" "$expiry"; else fail 'Gagal mengunci akun.'; fi
-        else if passwd -u "$user" >/dev/null; then record_set "$user" "$expiry" unlocked; ok 'Akun dibuka.'; notify_event unlock "$user" "$expiry"; else fail 'Gagal membuka kunci akun.'; fi; fi
+        if [[ "$choice" == 7 ]]; then
+          if passwd -l "$user" >/dev/null; then record_set "$user" "$expiry" locked; ok 'Akun dikunci.'; notify_event lock "$user" "$expiry"
+          else fail 'Gagal mengunci akun.'; fi
+        elif [[ "$expiry" < "$(date +%F)" ]]; then
+          fail 'Akun sudah kedaluwarsa. Perpanjang masa aktif sebelum membuka kunci.'
+        elif passwd -u "$user" >/dev/null; then
+          linux_expiry=$(date -d "${expiry} + 1 day" +%F)
+          if chage -E "$linux_expiry" "$user"; then
+            record_set "$user" "$expiry" unlocked; ok 'Akun dibuka.'; notify_event unlock "$user" "$expiry"
+          else
+            passwd -l "$user" >/dev/null 2>&1 || true
+            fail 'Gagal menyelaraskan tanggal expiry Linux.'
+          fi
+        else
+          fail 'Gagal membuka kunci akun.'
+        fi
       fi
       ;;
     9) list_users ;;
@@ -201,8 +215,12 @@ while true; do
         while read -r marker ru rexp rstatus; do
           [[ "$marker" == '###' && -n "$ru" ]] || continue
           if getent passwd "$ru" >/dev/null; then
-            if chage -E "$rexp" "$ru"; then
-              if [[ "$rstatus" == locked || "$rstatus" == expired ]]; then passwd -l "$ru" >/dev/null 2>&1 || { failed=$((failed+1)); continue; }
+            if [[ "$rexp" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              if [[ "$rexp" < "$(date +%F)" || "$rstatus" == expired ]]; then linux_expiry="$rexp"
+              else linux_expiry=$(date -d "${rexp} + 1 day" +%F); fi
+            else failed=$((failed+1)); continue; fi
+            if chage -E "$linux_expiry" "$ru"; then
+              if [[ "$rstatus" == locked || "$rstatus" == expired || "$rexp" < "$(date +%F)" ]]; then passwd -l "$ru" >/dev/null 2>&1 || { failed=$((failed+1)); continue; }
               else passwd -u "$ru" >/dev/null 2>&1 || true; fi
               recovered=$((recovered+1))
               jq -cn --arg username "$ru" --arg expiry "$rexp" --arg status "$rstatus" '{username:$username,expiry:$expiry,status:$status}' >> "$details_tmp"

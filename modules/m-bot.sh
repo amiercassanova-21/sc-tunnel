@@ -33,12 +33,12 @@ show_status() {
 setup_bot() {
     local token admin tmp
     read -rp 'Bot Token dari @BotFather: ' token
-    read -rp 'Admin Chat ID (boleh beberapa, pisahkan koma): ' admin
+    read -rp 'Admin Telegram User ID (chat pribadi, boleh beberapa, pisahkan koma): ' admin
     if [[ ! "$token" =~ ^[0-9]{5,}:[A-Za-z0-9_-]{20,}$ ]]; then
         echo 'Format token tidak valid. Tidak ada perubahan.'; return 1
     fi
-    if [[ ! "$admin" =~ ^-?[0-9]+(,-?[0-9]+)*$ ]]; then
-        echo 'Admin ID harus berupa angka; pisahkan beberapa ID dengan koma.'; return 1
+    if [[ ! "$admin" =~ ^[1-9][0-9]{4,19}(,[1-9][0-9]{4,19})*$ ]]; then
+        echo 'Admin ID harus berupa angka positif (5-20 digit); pisahkan beberapa ID dengan koma. Bot hanya menerima chat pribadi admin.'; return 1
     fi
     # Verify token with Telegram before saving it.
     if ! curl -fsS --connect-timeout 8 --max-time 15 "https://api.telegram.org/bot${token}/getMe" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("ok") else 1)'; then
@@ -50,8 +50,9 @@ setup_bot() {
     printf 'TOKEN=%s\nADMIN=%s\n' "$token" "$admin" > "$tmp"
     install -m 0600 "$tmp" "$CONF_FILE"
     rm -f "$tmp"
+    systemctl enable "$SERVICE" >/dev/null 2>&1 || true
     systemctl restart "$SERVICE"
-    echo 'Konfigurasi disimpan dengan permission 600 dan layanan direstart.'
+    echo 'Konfigurasi disimpan dengan permission 600; bot diaktifkan dan direstart.'
 }
 
 need_root

@@ -397,10 +397,24 @@ case "$ACTION" in
  lock|unlock)
   api_enabled || { echo "Xray API belum aktif. Jalankan sekali: xray-manager $PROTO api-enable." >&2; exit 1; }
   list_records; read -rp "Username: " U; DATA=$(get_record "$U") || { echo "Akun tidak ditemukan."; exit 1; }; read -r _ _ E C ST <<< "$DATA"
+  if [[ "$ACTION" == unlock && "$E" < "$(date +%F)" ]]; then
+    echo "Akun sudah kedaluwarsa. Perpanjang masa aktif sebelum membuka kunci." >&2; exit 1
+  fi
   CFG_TMP=$(mktemp); DB_TMP=$(mktemp)
-  if [[ "$ACTION" == lock ]]; then candidate_remove "$U" "$CFG_TMP"; NEWST=locked; runtime_remove_user "$U"
-  else candidate_add "$U" "$C" "$CFG_TMP"; NEWST=unlocked; runtime_add_user "$U" "$C"; fi
-  validate_candidate "$CFG_TMP"; write_db_replace "$U" "$E" "$C" "$NEWST" "$DB_TMP"; backup_state
+  if [[ "$ACTION" == lock ]]; then
+    candidate_remove "$U" "$CFG_TMP"; NEWST=locked
+  else
+    candidate_add "$U" "$C" "$CFG_TMP"; NEWST=unlocked
+  fi
+  # Validate the candidate before touching the live Xray runtime.
+  validate_candidate "$CFG_TMP"
+  write_db_replace "$U" "$E" "$C" "$NEWST" "$DB_TMP"
+  backup_state
+  if [[ "$ACTION" == lock ]]; then
+    runtime_remove_user "$U" || { rm -f "$CFG_TMP" "$DB_TMP"; echo "Gagal menghapus user dari runtime Xray; database tidak diubah." >&2; exit 1; }
+  else
+    runtime_add_user "$U" "$C" || { rm -f "$CFG_TMP" "$DB_TMP"; echo "Gagal menambahkan user ke runtime Xray; database tidak diubah." >&2; exit 1; }
+  fi
   if ! commit_config_db "$CFG_TMP" "$DB_TMP"; then
     if [[ "$ACTION" == lock ]]; then runtime_add_user "$U" "$C" >/dev/null 2>&1 || true; else runtime_remove_user "$U" >/dev/null 2>&1 || true; fi
     rm -f "$CFG_TMP" "$DB_TMP"; exit 1

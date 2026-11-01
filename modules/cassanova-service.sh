@@ -125,7 +125,10 @@ reload_nginx() {
 }
 
 restart_all() {
-  local failed=0 svc
+  local failed=0 svc confirm
+  echo 'PERINGATAN: restart core services dapat memutus koneksi VPN aktif sementara.'
+  read -rp 'Ketik RESTART untuk melanjutkan: ' confirm
+  [[ "$confirm" == RESTART ]] || { echo 'Restart dibatalkan.'; return 0; }
   validate_all || return 1
   for svc in xray sing-box nginx cassanova-dropbear fail2ban vnstat; do
     systemctl cat "$svc" >/dev/null 2>&1 || continue
@@ -135,7 +138,7 @@ restart_all() {
     echo 'Sebagian service gagal direstart. Lihat status dan journalctl masing-masing.' >&2
     return 1
   fi
-  echo 'Seluruh service yang terpasang berhasil direstart.'
+  echo 'Seluruh core service yang tersedia berhasil direstart.'
 }
 
 ui() {
@@ -151,7 +154,7 @@ ui() {
     echo '7) Restart Nginx (setelah validasi)'
     echo '8) Reload Nginx (setelah validasi)'
     echo '9) Restart Dropbear'
-    echo '10) Restart semua service'
+    echo '10) Restart core services (putus koneksi sementara)'
     echo 'x) Kembali'
     read -rp 'Pilih: ' opt || return 0
     case "$opt" in

@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 umask 077
 
-DB=/etc/sing-box/users.json
+DB=/var/lib/cassanova/hysteria2/users.json
+LEGACY_DB=/etc/sing-box/users.json
 CONFIG=/etc/sing-box/config.json
 LOCK=/run/lock/cassanova-hy2.lock
 BACKUP=/var/backups/cassanova/hysteria2
@@ -13,13 +14,64 @@ NOTIFIER=/usr/local/bin/cassanova-notify.py
 [[ $EUID -eq 0 ]] || { echo "Jalankan sebagai root." >&2; exit 1; }
 for c in jq flock sing-box openssl install mktemp systemctl; do command -v "$c" >/dev/null 2>&1 || { echo "Dependensi tidak ditemukan: $c" >&2; exit 1; }; done
 install -d -m 0700 "$(dirname "$DB")" "$BACKUP" /run/lock
-[[ -s "$DB" ]] || printf '[]\n' > "$DB"
-[[ -s "$CONFIG" ]] || printf '{"log":{"level":"warn"},"inbounds":[],"outbounds":[{"type":"direct","tag":"direct"}]}\n' > "$CONFIG"
-jq -e 'type == "array"' "$DB" >/dev/null || { echo "Database Hysteria2 rusak; hentikan agar data tidak tertimpa." >&2; exit 1; }
 exec 9>"$LOCK"; flock -x 9
 
+# Schema validation prevents malformed records from silently becoming invalid inbounds.
+validate_db() {
+  jq -e '
+    type == "array" and
+    all(.[];
+      type == "object" and
+      (.username | type == "string" and test("^[A-Za-z0-9_.-]{1,32}$")) and
+      (.password | type == "string" and test("^[A-Za-z0-9._~-]{12,128}$")) and
+      (.expiry | type == "string") and
+      (.expiry as $d | ($d | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) and (try (($d | strptime("%Y-%m-%d") | mktime | strftime("%Y-%m-%d")) == $d) catch false)) and
+      (.status == "active" or .status == "locked" or .status == "expired")
+    ) and
+    (. as $rows | ([ $rows[].username ] | unique | length) == ($rows | length))
+  ' "$1" >/dev/null 2>&1
+}
+
+# Move the legacy database out of /etc/sing-box: the service loads every JSON
+# file in that directory as a config fragment. Never overwrite the new DB.
+if [[ -e "$DB" ]]; then
+  if ! validate_db "$DB"; then
+    if [[ -e "$LEGACY_DB" ]]; then
+      mv -- "$LEGACY_DB" "$BACKUP/legacy-users-$(date +%Y%m%d-%H%M%S).json.bak"
+      echo "DB baru rusak; file legacy dipindahkan ke backup agar tidak ikut dibaca sebagai konfigurasi sing-box." >&2
+    fi
+    echo "Database Hysteria2 baru rusak; tidak akan ditimpa." >&2
+    exit 1
+  fi
+fi
+if [[ -e "$LEGACY_DB" ]]; then
+  stamp=$(date +%Y%m%d-%H%M%S)
+  if [[ ! -e "$DB" ]]; then
+    if validate_db "$LEGACY_DB"; then
+      tmpdb=$(mktemp "$(dirname "$DB")/.users.XXXXXX")
+      if ! install -o root -g root -m 0600 "$LEGACY_DB" "$tmpdb" || ! validate_db "$tmpdb"; then
+        rm -f "$tmpdb"
+        echo "Migrasi DB lama gagal divalidasi; file legacy tetap dipertahankan." >&2
+        exit 1
+      fi
+      mv -f "$tmpdb" "$DB"
+    else
+      mv -- "$LEGACY_DB" "$BACKUP/legacy-users-${stamp}.invalid.json.bak"
+      echo "Peringatan: DB legacy tidak sesuai schema; disimpan sebagai backup invalid, DB kosong akan dibuat." >&2
+    fi
+  fi
+  # Archive either the successfully migrated legacy DB or an older duplicate.
+  if [[ -e "$LEGACY_DB" ]]; then
+    mv -- "$LEGACY_DB" "$BACKUP/legacy-users-${stamp}.json.bak"
+  fi
+fi
+if [[ ! -e "$DB" ]]; then printf '[]\n' > "$DB"; fi
+validate_db "$DB" || { echo "Database Hysteria2 tidak valid; perubahan dibatalkan." >&2; exit 1; }
+chown root:root "$DB"; chmod 0600 "$DB"
+[[ -s "$CONFIG" ]] || printf '{"log":{"level":"warn"},"inbounds":[],"outbounds":[{"type":"direct","tag":"direct"}]}\n' > "$CONFIG"
+
 valid_user(){ [[ "$1" =~ ^[A-Za-z0-9_.-]{1,32}$ ]]; }
-valid_days(){ [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 )); }
+valid_days(){ [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 36500 )); }
 
 get_tls_paths(){
   DOMAIN=$(tr -d '[:space:]' < /etc/xray/domain.txt 2>/dev/null || true)
@@ -51,13 +103,19 @@ get_tls_paths(){
 build_config(){
   local dbfile="$1" outfile="$2"
   get_tls_paths
-  jq -n --arg cert "$CERT" --arg key "$KEY" --arg today "$(date +%F)" --slurpfile records "$dbfile" '
-    {log:{level:"warn"},
-     inbounds:[{type:"hysteria2",tag:"hysteria2-in",listen:"::",listen_port:443,
-       users:([$records[0][] | select(.status == "active" and .expiry >= $today) | {name:.username,password:.password}]),
-       tls:{enabled:true,certificate_path:$cert, key_path:$key},
-       masquerade:{type:"string",status_code:404,headers:{},content:"Not Found"}}],
-     outbounds:[{type:"direct",tag:"direct"}]}' > "$outfile"
+  jq -e 'type == "object" and ((.inbounds // []) | type == "array") and ((.outbounds // []) | type == "array")' "$CONFIG" >/dev/null || {
+    echo "Konfigurasi sing-box bukan objek/array yang valid; perubahan dibatalkan." >&2; return 1;
+  }
+  jq --arg cert "$CERT" --arg key "$KEY" --arg today "$(date +%F)" --slurpfile records "$dbfile" '
+    . as $root
+    | ([ $records[0][] | select(.status == "active" and .expiry >= $today) | {name:.username,password:.password} ]) as $users
+    | {type:"hysteria2",tag:"hysteria2-in",listen:"::",listen_port:443,
+       users:$users,tls:{enabled:true,certificate_path:$cert,key_path:$key},
+       masquerade:{type:"string",status_code:404,headers:{},content:"Not Found"}} as $hy2
+    | $root
+    | .inbounds = ((.inbounds // []) | map(select(.tag != "hysteria2-in")) + [$hy2])
+    | .outbounds = ((.outbounds // []) | if any(.[]; .tag == "direct") then . else . + [{type:"direct",tag:"direct"}] end)
+  ' "$CONFIG" > "$outfile"
   sing-box check -c "$outfile" >/dev/null
 }
 
@@ -162,10 +220,23 @@ case "$ACTION" in
   NEW=$(mktemp)
   case "$ACTION" in
    delete) jq --arg u "$U" '[.[] | select(.username!=$u)]' "$DB" > "$NEW" ;;
-   renew) read -rp 'Tambah masa aktif (hari): ' DAYS; valid_days "$DAYS" || exit 1; jq --arg u "$U" --arg e "$(date -d "+${DAYS} days" +%Y-%m-%d)" 'map(if .username==$u then .expiry=$e else . end)' "$DB" > "$NEW" ;;
+   renew)
+    read -rp 'Tambah masa aktif (hari): ' DAYS; valid_days "$DAYS" || { rm -f "$NEW"; exit 1; }
+    BASE=$(date +%s); OLD_TS=$(date -d "$OLD_EXP" +%s 2>/dev/null || echo 0)
+    (( OLD_TS < BASE )) && OLD_TS=$BASE
+    NEW_EXP=$(date -d "@$((OLD_TS + DAYS*86400))" +%Y-%m-%d)
+    # A renewed expired account becomes active; a manually locked account stays locked.
+    NEW_STATUS=$(jq -r '.status' <<< "$OLD_RECORD"); [[ "$NEW_STATUS" == expired ]] && NEW_STATUS=active
+    jq --arg u "$U" --arg e "$NEW_EXP" --arg st "$NEW_STATUS" 'map(if .username==$u then .expiry=$e | .status=$st else . end)' "$DB" > "$NEW"
+    ;;
    modify) read -rsp 'Password baru: ' PASS; echo; [[ "$PASS" =~ ^[A-Za-z0-9._~-]{12,128}$ ]] || { rm -f "$NEW"; echo 'Password tidak valid.'; exit 1; }; jq --arg u "$U" --arg p "$PASS" 'map(if .username==$u then .password=$p else . end)' "$DB" > "$NEW" ;;
    lock) jq --arg u "$U" 'map(if .username==$u then .status="locked" else . end)' "$DB" > "$NEW" ;;
-   unlock) jq --arg u "$U" 'map(if .username==$u then .status="active" else . end)' "$DB" > "$NEW" ;;
+   unlock)
+    if [[ "$OLD_EXP" < "$(date +%F)" ]]; then
+      rm -f "$NEW"; echo 'Akun sudah kedaluwarsa. Perpanjang masa aktif sebelum membuka kunci.' >&2; exit 1
+    fi
+    jq --arg u "$U" 'map(if .username==$u then .status="active" else . end)' "$DB" > "$NEW"
+    ;;
   esac
   apply_db "$NEW"; rm -f "$NEW"; echo "Operasi $ACTION berhasil untuk $U."
   case "$ACTION" in
@@ -176,8 +247,20 @@ case "$ACTION" in
   esac
   ;;
  expire)
-  TODAY=$(date +%F); EXPIRED=$(jq -c --arg d "$TODAY" '[.[] | select(.expiry < $d and .status=="active")]' "$DB"); NEW=$(mktemp); jq --arg d "$TODAY" '[.[] | select(.expiry >= $d)]' "$DB" > "$NEW"
-  if ! cmp -s "$DB" "$NEW"; then apply_db "$NEW"; while IFS= read -r item; do [[ -n "$item" ]] || continue; notify_event expired "$(jq -r '.username' <<< "$item")" "$(jq -r '.expiry' <<< "$item")" "$(jq -r '.password' <<< "$item")"; done < <(jq -c '.[]' <<< "$EXPIRED"); echo 'Akun kedaluwarsa dibersihkan.'; else echo 'Tidak ada akun kedaluwarsa.'; fi
+  TODAY=$(date +%F)
+  EXPIRED=$(jq -c --arg d "$TODAY" '[.[] | select(.expiry < $d and .status=="active")]' "$DB")
+  NEW=$(mktemp)
+  jq --arg d "$TODAY" 'map(if .expiry < $d and .status=="active" then .status="expired" else . end)' "$DB" > "$NEW"
+  if ! cmp -s "$DB" "$NEW"; then
+    apply_db "$NEW"
+    while IFS= read -r item; do
+      [[ -n "$item" ]] || continue
+      notify_event expired "$(jq -r '.username' <<< "$item")" "$(jq -r '.expiry' <<< "$item")" "$(jq -r '.password' <<< "$item")"
+    done < <(jq -c '.[]' <<< "$EXPIRED")
+    echo 'Akun kedaluwarsa dinonaktifkan; riwayat akun tetap tersimpan.'
+  else
+    echo 'Tidak ada akun kedaluwarsa.'
+  fi
   rm -f "$NEW" ;;
  recover|recovery)
   DETAILS=$(jq -c --arg d "$(date +%F)" '[.[] | select(.status=="active" and .expiry >= $d) | {username,expiry,password,status}]' "$DB")

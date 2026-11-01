@@ -26,7 +26,10 @@ PATHS=(
   etc/systemd/system/sing-box.service
   etc/systemd/system/nginx.service.d
   etc/systemd/system/ws-ssh.service
+  etc/systemd/system/cassanova-dropbear.service
   etc/systemd/system/bot-tele.service
+  etc/systemd/system/cassanova-expire.service
+  etc/systemd/system/cassanova-expire.timer
   etc/systemd/system/cassanova-bandwidth.service
   etc/systemd/system/cassanova-bandwidth.timer
   etc/systemd/system/dropbear.service.d
@@ -41,16 +44,25 @@ PATHS=(
   usr/bin/xray-manager
   usr/bin/hy2-manager
   usr/bin/cassanova-bandwidth
-  usr/bin/auto-exp
+  usr/bin/cassanova-expire
+  usr/bin/cassanova-ssh-expire
+  usr/bin/cassanova-service
+  usr/bin/cassanova-domain
+  usr/bin/cassanova-backup
+  usr/bin/cassanova-restore
   usr/bin/autokill-xray
   usr/bin/update-sc
   usr/bin/install-hysteria2
   usr/local/bin/bot-tele.py
+  usr/local/bin/cassanova-notify.py
+  usr/local/share/cassanova
+  etc/sysctl.d/99-cassanova.conf
   var/lib/cassanova/bandwidth-xray.json
+  var/lib/cassanova/hysteria2
   root/.config/cassanova
 )
 
-mkdir -p "$WORK/rootfs" "$DEST_DIR"
+mkdir -p "$WORK/rootfs/root" "$DEST_DIR"
 : > "$WORK/included.txt"
 for rel in "${PATHS[@]}"; do
   src="/$rel"
@@ -60,8 +72,8 @@ for rel in "${PATHS[@]}"; do
   printf '%s\n' "$rel" >> "$WORK/included.txt"
 done
 
-# Save root's scheduled jobs, if any, without exporting unrelated system crontabs.
-if crontab -l > "$WORK/rootfs/root/cassanova-root.crontab" 2>/dev/null; then
+# Save only jobs explicitly marked as Cassanova-managed. Never replace unrelated root cron jobs.
+if crontab -l 2>/dev/null | grep -F '# CASSANOVA_' > "$WORK/rootfs/root/cassanova-root.crontab"; then
   printf '%s\n' 'root/cassanova-root.crontab' >> "$WORK/included.txt"
 fi
 
@@ -77,13 +89,15 @@ Excluded intentionally: /etc/passwd, /etc/shadow, /etc/group, /etc/gshadow,
 /etc/fstab, network config, machine-id, package database, kernel and OS files.
 SSH Linux login users are not recreated by this archive; migrate/recreate them separately.
 Xray per-user bandwidth usage counters are included when present.
+Only root crontab entries marked # CASSANOVA_ are included; unrelated cron jobs are excluded.
 INFO
 
 # Build archive in destination directory, then atomically replace previous backup.
 TMP_ARCHIVE="$DEST_DIR/.Cassanova_restore.$$.tmp"
 tar -czpf "$TMP_ARCHIVE" -C "$WORK/rootfs" .
 tar -tzf "$TMP_ARCHIVE" >/dev/null
-sha256sum "$TMP_ARCHIVE" > "$TMP_ARCHIVE.sha256"
+ARCHIVE_HASH=$(sha256sum "$TMP_ARCHIVE" | awk '{print $1}')
+printf '%s  %s\n' "$ARCHIVE_HASH" "$(basename "$DEST_FILE")" > "$TMP_ARCHIVE.sha256"
 mv -f "$TMP_ARCHIVE" "$DEST_FILE"
 mv -f "$TMP_ARCHIVE.sha256" "$DEST_FILE.sha256"
 chmod 0600 "$DEST_FILE" "$DEST_FILE.sha256"
