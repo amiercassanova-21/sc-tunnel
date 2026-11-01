@@ -1,9 +1,4 @@
-cat << 'FIX_TOTAL' > /root/fix-total.sh
-#!/bin/bash
-NC='\e[0m'; GREEN='\e[1;32m'; YELLOW='\e[1;33m'
-
-echo -e "${YELLOW}Memperbaiki file menu lokal di VPS...${NC}"
-cat << 'MENU_EOF' > /usr/bin/menu
+cat << 'MENU_FINAL' > /usr/bin/menu
 #!/bin/bash
 trap 'echo -e "\n\e[1;33mKeluar dari Menu ke Terminal Utama...\e[0m"; exit 0' SIGINT
 printf "\033[2J\033[H\033[3J"
@@ -72,11 +67,14 @@ ORDER_BY=$(cat /etc/xray/order.txt 2>/dev/null || echo "Cassanova VIP")
 CLIENT_NAME=$(cat /etc/xray/client.txt 2>/dev/null || echo "$(hostname)")
 EXP_DAYS=$(cat /etc/xray/exp.txt 2>/dev/null || echo "Lifetime")
 
+# Banner CASSANOVA (Kotak Penuh 50 Karakter)
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC}       ${RED}█▀▀ █▀█ █▀▀ █▀▀ █▀█ █▄ █ █▀█ █ █ █▀█${NC}       ${BLUE}│${NC}"
 echo -e " ${BLUE}│${NC}       ${WHITE}█▄▄ █▀█ ▄██ ▄██ █▀█ █ ▀█ █▄█ ▀▄▀ █▀█${NC}       ${BLUE}│${NC}"
-echo -e " ${BLUE}│${NC}             ${CYAN}• CASSANOVA TUNNELING V2 •${NC}             ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC}            ${CYAN}• CASSANOVA TUNNELING V2 •${NC}            ${BLUE}│${NC}"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
+
+# Info Sistem (Hanya Garis Kiri)
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}OS${NC}       : ${OS_NAME}"
 echo -e " ${BLUE}│${NC} ${GREEN}RAM${NC}      : ${RAM_PERCENT}% (${RAM_USED}M/${RAM_TOTAL}M)"
@@ -85,39 +83,47 @@ echo -e " ${BLUE}│${NC} ${GREEN}ISP${NC}      : ${ISP}"
 echo -e " ${BLUE}│${NC} ${GREEN}IP${NC}       : ${IP_VPS}"
 echo -e " ${BLUE}│${NC} ${GREEN}DOMAIN${NC}   : ${DOMAIN}"
 echo -e " ${BLUE}│${NC} ${GREEN}UPTIME${NC}   : ${UPTIME}"
-echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC} ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC} ${RED}──────────────────────────────────────────────────${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}MONTH${NC}    : ${MONTH_TOTAL}          ${YELLOW}[${CURR_MONTH}]${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}RX${NC}       : ${MONTH_RX}"
 echo -e " ${BLUE}│${NC} ${GREEN}TX${NC}       : ${MONTH_TX}"
-echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC} ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC} ${RED}──────────────────────────────────────────────────${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}DAY${NC}      : ${DAY_TOTAL}          ${YELLOW}[${CURR_DAY}]${NC}"
 echo -e " ${BLUE}│${NC} ${GREEN}RX${NC}       : ${DAY_RX}"
 echo -e " ${BLUE}│${NC} ${GREEN}TX${NC}       : ${DAY_TX}"
 echo -e " ${BLUE}│${NC} ${GREEN}TRAFFIC${NC}  : ${TRAFFIC}"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
+
+# Status Service (Hanya Garis Kiri)
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e " ${BLUE}│${NC} ${GREEN}XRAY:${STATUS_XRAY}${NC} │ ${GREEN}SSH-WS:${STATUS_SSH}${NC} │ ${GREEN}BBR:${STATUS_BBR}${NC} │ ${GREEN}F2B:${STATUS_F2B}${NC} │  ${GREEN}GOOD${NC}  ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC} ${GREEN}XRAY:${STATUS_XRAY}${NC} │ ${GREEN}SSH-WS:${STATUS_SSH}${NC} │ ${GREEN}BBR:${STATUS_BBR}${NC} │ ${GREEN}F2B:${STATUS_F2B}${NC} │  ${GREEN}GOOD${NC}"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
+
+# List Akun (Hanya Garis Kiri - Digeser Tengah)
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e " ${BLUE}│${NC}                  ${GREEN}LIST ACCOUNTS${NC}                 ${BLUE}│${NC}"
-echo -e " ${BLUE}│${NC} ${RED}────────────────────────────────────────────────${NC} ${BLUE}│${NC}"
-printf " ${BLUE}│${NC}          ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}            ${BLUE}│${NC}\n" "SSH/OPENVPN" "$TOTAL_SSH"
-printf " ${BLUE}│${NC}          ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}            ${BLUE}│${NC}\n" "VMESS" "$TOTAL_VMESS"
-printf " ${BLUE}│${NC}          ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}            ${BLUE}│${NC}\n" "VLESS" "$TOTAL_VLESS"
-printf " ${BLUE}│${NC}          ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}            ${BLUE}│${NC}\n" "TROJAN" "$TOTAL_TROJAN"
+echo -e " ${BLUE}│${NC}                  ${GREEN}LIST ACCOUNTS${NC}"
+echo -e " ${BLUE}│${NC} ${RED}──────────────────────────────────────────────────${NC}"
+printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "SSH/OPENVPN" "$TOTAL_SSH"
+printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "VMESS" "$TOTAL_VMESS"
+printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "VLESS" "$TOTAL_VLESS"
+printf " ${BLUE}│${NC}           ${GREEN}%-14s${NC} : ${YELLOW}%-3s${NC} ${GREEN}ACCOUNT${NC}\n" "TROJAN" "$TOTAL_TROJAN"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
+
+# Client Info (Hanya Garis Kiri - Digeser Tengah)
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e " ${BLUE}│${NC}    ${GREEN}Version${NC}     : ${VERSION}"
-echo -e " ${BLUE}│${NC}    ${GREEN}Order By${NC}    : ${RED}${ORDER_BY}${NC}"
-echo -e " ${BLUE}│${NC}    ${GREEN}Client Name${NC} : ${RED}${CLIENT_NAME}${NC}"
-echo -e " ${BLUE}│${NC}    ${GREEN}Expiry In${NC}   : ${RED}${EXP_DAYS}${NC}"
+echo -e " ${BLUE}│${NC}           ${GREEN}Version${NC}     : ${VERSION}"
+echo -e " ${BLUE}│${NC}           ${GREEN}Order By${NC}    : ${RED}${ORDER_BY}${NC}"
+echo -e " ${BLUE}│${NC}           ${GREEN}Client Name${NC} : ${RED}${CLIENT_NAME}${NC}"
+echo -e " ${BLUE}│${NC}           ${GREEN}Expiry In${NC}   : ${RED}${EXP_DAYS}${NC}"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
+
+# Tombol Menu (Hanya Garis Kiri)
 echo -e " ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
-echo -e " ${BLUE}│${NC}  ${GREEN}1.)${NC} ⌨ SSH                 ${GREEN}6.)${NC} ⌨ FEATURES         ${BLUE}│${NC}"
-echo -e " ${BLUE}│${NC}  ${GREEN}2.)${NC} ⌨ VMESS               ${GREEN}7.)${NC} ⌨ SET REDUCE/TIME  ${BLUE}│${NC}"
-echo -e " ${BLUE}│${NC}  ${GREEN}3.)${NC} ⌨ VLESS               ${GREEN}8.)${NC} ⌨ SET BRAND NAME   ${BLUE}│${NC}"
-echo -e " ${BLUE}│${NC}  ${GREEN}4.)${NC} ⌨ TROJAN              ${GREEN}9.)${NC} ⌨ CHECK SERVICES   ${BLUE}│${NC}"
-echo -e " ${BLUE}│${NC}  ${GREEN}5.)${NC} ⌨ SETUP BOT           ${RED}x.)${NC} ⌨ EXIT             ${BLUE}│${NC}"
+echo -e " ${BLUE}│${NC}  ${GREEN}1.)${NC} ⌨ SSH                 ${GREEN}6.)${NC} ⌨ FEATURES"
+echo -e " ${BLUE}│${NC}  ${GREEN}2.)${NC} ⌨ VMESS               ${GREEN}7.)${NC} ⌨ SET REDUCE/TIME"
+echo -e " ${BLUE}│${NC}  ${GREEN}3.)${NC} ⌨ VLESS               ${GREEN}8.)${NC} ⌨ SET BRAND NAME"
+echo -e " ${BLUE}│${NC}  ${GREEN}4.)${NC} ⌨ TROJAN              ${GREEN}9.)${NC} ⌨ CHECK SERVICES"
+echo -e " ${BLUE}│${NC}  ${GREEN}5.)${NC} ⌨ SETUP BOT           ${RED}x.)${NC} ⌨ EXIT"
 echo -e " ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 echo ""
 
@@ -135,19 +141,5 @@ case $OPTION in
     x|X) exit 0 ;;
     *) echo -e "${RED}Pilihan tidak valid!${NC}"; sleep 1; menu ;;
 esac
-MENU_EOF
+MENU_FINAL
 chmod +x /usr/bin/menu
-
-echo -e "${YELLOW}Membersihkan duplikasi bashrc...${NC}"
-cat << 'BRC' > /root/.bashrc
-case $- in *i*) ;; *) return;; esac
-HISTCONTROL=ignoredups:ignorespace; shopt -s histappend; HISTSIZE=1000; HISTFILESIZE=2000; shopt -s checkwinsize
-if [ -f ~/.bash_aliases ]; then . ~/.bash_aliases; fi
-PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-if [[ -f /usr/bin/menu ]]; then /usr/bin/menu; fi
-BRC
-
-echo -e "${GREEN}Perbaikan Selesai! Ketik 'menu' untuk melihat hasilnya.${NC}"
-FIX_TOTAL
-bash /root/fix-total.sh
-rm -f /root/fix-total.sh
