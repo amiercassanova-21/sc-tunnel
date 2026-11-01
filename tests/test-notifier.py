@@ -29,7 +29,7 @@ class FakeResponse:
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         conf = Path(tmp) / 'bot.conf'
-        conf.write_text('TOKEN=12345:abcdefghijklmnopqrstuvwxyz\nADMIN=111,222\n', encoding='utf-8')
+        conf.write_text('TOKEN=12345:abcdefghijklmnopqrstuvwxyz\nADMIN=11111,22222\n', encoding='utf-8')
         MOD.CONF = conf
         payloads = []
 

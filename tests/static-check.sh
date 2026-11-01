@@ -92,3 +92,39 @@ grep -q 'fourth.*expired' modules/m-ssh.sh
 grep -q 'systemctl kill --signal=HUP --kill-whom=main' modules/hy2-manager.sh
 grep -q 'Konfigurasi dimuat ulang dengan SIGHUP' modules/hy2-manager.sh
 printf 'R6 Hysteria2 graceful-reload static checks passed. Live SIGHUP behaviour requires VPS integration testing.\n'
+
+# R6 storage isolation and merge-preservation guards.
+grep -q 'DB=/var/lib/cassanova/hysteria2/users.json' modules/hy2-manager.sh
+grep -q 'LEGACY_DB=/etc/sing-box/users.json' modules/hy2-manager.sh
+grep -q 'map(select(.tag != "hysteria2-in"))' modules/hy2-manager.sh
+grep -q '/var/lib/cassanova/hysteria2/users.json' menu.sh
+grep -q '/var/lib/cassanova/hysteria2/users.json' bot-tele.py
+grep -q 'var/lib/cassanova/hysteria2' modules/cassanova-backup.sh
+grep -Fq 'var/lib/cassanova/hysteria2/*' modules/cassanova-restore.sh
+printf 'R6 Hysteria2 database isolation and config-preservation static checks passed.\n'
+
+# R6 full-audit regression gates: valid calendar dates, preserved sing-box
+# configuration, restored service ownership, cert rollback, bot allowlist and branch consistency.
+grep -q 'strptime("%Y-%m-%d")' modules/hy2-manager.sh
+grep -q 'strptime("%Y-%m-%d")' setup.sh
+grep -q 'strptime("%Y-%m-%d")' install-hysteria2.sh
+grep -q 'chown root:sing-box /etc/sing-box' modules/cassanova-restore.sh
+grep -q 'MUTATION_STARTED' modules/cassanova-domain.sh
+grep -q 'MUTATION_STARTED' modules/cassanova-cert-renew.sh
+grep -q 'restore_old' modules/cassanova-cert-renew.sh
+grep -q 'mkdir -p "\$WORK/rootfs/root"' modules/cassanova-backup.sh
+grep -q 'DNS_IPV6S' modules/cassanova-domain.sh
+grep -q 'systemctl start nginx' modules/cassanova-cert-post.sh
+grep -q 'PRE_BACKUP_DIR=.*pre-hy2-install' install-hysteria2.sh
+grep -q 'root.crontab.current' install-hysteria2.sh
+grep -q 'chat.get('\''type'\'') == '\''private'\''' bot-tele.py
+grep -q 'r6-testing' setup.sh
+grep -q 'r6-testing' update.sh
+grep -q 'r6-testing' README.md
+! grep -Eq '\[A-Za-z0-9 ._\+-\]' menu.sh modules/m-feature.sh
+bash tests/test-ssh-expire.sh
+python3 tests/test-notifier.py
+bash tests/test-hy2-config.sh
+printf 'R6 full-audit regression tests passed. Live protocol, TLS renewal and restore tests still require a staging VPS.\n'
+grep -q 'Ketik RESTART untuk melanjutkan' modules/cassanova-service.sh
+grep -q 'Restart Core Services' modules/m-feature.sh
