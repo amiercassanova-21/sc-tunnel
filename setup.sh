@@ -278,7 +278,7 @@ echo -e "${YELLOW}[6/8] Menyiapkan housekeeping aman...${NC}"
 # dan enforcement-nya tidak aman. Crontab administrator tidak disentuh.
 
 echo -e "${YELLOW}[7/8] Mengunduh UI Menu & Bot Telegram dari GitHub Anda...${NC}"
-REPO="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/main"
+REPO="https://raw.githubusercontent.com/amiercassanova-21/sc-tunnel/r6-testing"
 STAGE=$(mktemp -d)
 cleanup_stage() { rm -rf "$STAGE"; }
 trap cleanup_stage EXIT
