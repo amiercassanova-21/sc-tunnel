@@ -13,6 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Python
-        run: sudo apt-get update && sudo apt-get install -y python3
+        run: sudo apt-get update && sudo apt-get install -y python3 jq
       - name: Validate shell and Python syntax
         run: bash tests/static-check.sh
