@@ -122,7 +122,14 @@ grep -q 'r6-testing' setup.sh
 grep -q 'r6-testing' update.sh
 grep -q 'r6-testing' README.md
 ! grep -Eq '\[A-Za-z0-9 ._\+-\]' menu.sh modules/m-feature.sh
-bash tests/test-ssh-expire.sh
+if [[ $EUID -eq 0 ]]; then
+  bash tests/test-ssh-expire.sh
+elif command -v sudo >/dev/null 2>&1; then
+  sudo bash tests/test-ssh-expire.sh
+else
+  echo "SSH expiry unit test requires root or sudo." >&2
+  exit 1
+fi
 python3 tests/test-notifier.py
 bash tests/test-hy2-config.sh
 printf 'R6 full-audit regression tests passed. Live protocol, TLS renewal and restore tests still require a staging VPS.\n'

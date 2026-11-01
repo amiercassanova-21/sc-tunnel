@@ -8,7 +8,10 @@ LOCK=${CASSANOVA_SSH_LOCK:-/run/lock/sc-tunnel-ssh.lock}
 NOTIFIER=${CASSANOVA_NOTIFIER:-/usr/local/bin/cassanova-notify.py}
 [[ -s "$DB" ]] || exit 0
 for cmd in flock awk date install mktemp passwd chage jq python3; do command -v "$cmd" >/dev/null 2>&1 || { echo "Missing dependency: $cmd" >&2; exit 1; }; done
-install -d -m 0700 /run/lock
+LOCK_DIR=$(dirname "$LOCK")
+if [[ ! -d "$LOCK_DIR" ]]; then
+  install -d -m 0700 "$LOCK_DIR"
+fi
 exec 9>"$LOCK"; flock -x 9
 TODAY=$(date +%F)
 TMP=$(mktemp)
